@@ -34,13 +34,12 @@ This proves *where and how* an artifact was built (this repo, this workflow, thi
 - A scheduled CI run (`compat-latest`, weekly) tests the shipped jar against the newest Community Build tag so an incompatible upstream release shows up as a red run before you upgrade.
 
 ## Security model, and what it does not do
-- **Revocation is by expiry only.** A leaked token works until it expires: use short-lived tokens (Kubernetes `expirationSeconds: 600`) and a matching `maxTokenLifetimeSeconds` (900).
+- **Revocation is by expiry only** (there is no per-token revocation). A leaked token works until it expires: use short-lived tokens (Kubernetes `expirationSeconds: 600`) and a matching `maxTokenLifetimeSeconds` (900).
 - A token is accepted only if: RS256/ES256 signature verifies with a key from the issuer's JWKS; `iss` matches a source; `aud` contains an accepted audience;
   `exp` valid and `exp − iat` ≤ `maxTokenLifetimeSeconds`; `sub` matches a rule. Anything claiming a configured issuer but failing is **rejected**, never downgraded.
 - A JWT session can only call the scanner endpoints in `allowedPathPrefixes`, and with `projectKeyPattern` only the projects it names. Requests whose path
   looks like routing tricks (`..`, `;`, `%`, `//`) are refused.
 - **Denials surface as HTTP 401** with the reason in the SonarQube log (SonarQube's authentication layer cannot return 403 from this hook).
-- **Revocation is by expiry**: there is no per-token revocation. Keep `expirationSeconds` short (Kubernetes: 600) and set `maxTokenLifetimeSeconds` just above it (900). Keys removed from the
   JWKS stop working after the next refresh (every ≤10 min; a cached key set is trusted for at most 6 h if the issuer is unreachable).
 - The extension cannot see which permissions a group holds: do not put a group with *Administer* in `groups`.
 - Any identity with *Execute Analysis* can read global settings including secured ones (SonarQube lets scanners do that); `projectKeyPattern` cannot hide them.

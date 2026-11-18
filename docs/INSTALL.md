@@ -151,7 +151,7 @@ volumes:
     projected: {sources: [{serviceAccountToken: {audience: sonarqube, expirationSeconds: 600, path: token}}]}
 # step:
 #   export SONAR_TOKEN="$(cat /var/run/secrets/sonar/token)"
-#   sonar-scanner -Dsonar.host.url=https://sonar.example.org -Dsonar.projectKey=tekton-myapp
+#   sonar-scanner -Dsonar.host.url=https://sonar.example.org -Dsonar.projectKey=${NAMESPACE}_myapp   # must start with the pod's namespace + "_" because the rule above says "${ns}_.*"
 ```
 Jenkins: each Jenkins is its own `source` (its own issuer/keys), so you decide per source whether projects need a prefix. A Jenkins that should be free to use any project key:
 ```json
