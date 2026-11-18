@@ -1,0 +1,27 @@
+name: compat-latest
+# Early warning: every week (and on demand) run the shipped jar against the NEWEST SonarQube Community Build, so an upstream release that breaks
+# the internal APIs we hook is noticed before anyone upgrades.
+on:
+  schedule: [{cron: "17 5 * * 1"}]
+  workflow_dispatch:
+jobs:
+  newest:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with: {distribution: temurin, java-version: "21", cache: maven}
+      - run: pip install cryptography
+      - name: Find the newest Community Build tag
+        run: |
+          tag=$(curl -fsS "https://hub.docker.com/v2/repositories/library/sonarqube/tags?page_size=100&name=community" | python3 -c '
+          import sys, json, re
+          names = [t["name"] for t in json.load(sys.stdin)["results"] if re.fullmatch(r"\d+\.\d+\.\d+\.\d+-community", t["name"])]
+          print(max(names, key=lambda n: tuple(int(x) for x in n.split("-")[0].split("."))))')
+          echo "newest Community Build: $tag"; echo "TAG=$tag" >> "$GITHUB_ENV"
+      - name: Build the shipped jar (against the primary version, 26.10)
+        run: scripts/fetch-server-jar.sh && mvn -B -DskipTests package
+      - name: Integration test of that jar on the newest SonarQube
+        run: SONAR_IMAGE=sonarqube:$TAG scripts/integration/run.sh
+      - name: Does it still compile and pass unit tests against the newest server jar?
+        run: scripts/fetch-server-jar.sh sonarqube:$TAG && mvn -B verify

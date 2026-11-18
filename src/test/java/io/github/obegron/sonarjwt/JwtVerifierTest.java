@@ -298,6 +298,23 @@ class JwtVerifierTest {
     assertNotEquals(Log.category("token expired"), Log.category("audience not accepted by source x"));
   }
 
+  @Test void statsSummarizeActivityOnceAndResetAndAreBounded() {
+    Stats st = new Stats();
+    assertNull(st.drain());
+    st.accepted(); st.accepted(); st.provisioned(); st.denied(); st.rejected("token expired"); st.rejected("token expired"); st.rejected("audience not accepted");
+    String line = st.drain();
+    assertTrue(line.contains("authenticated=2") && line.contains("provisioned=1") && line.contains("denied(scope/path/user)=1") && line.contains("rejected=3"), line);
+    assertTrue(line.contains("[token expired: 2]"), line);
+    assertNull(st.drain());                                              // reset
+    for (int i = 0; i < 500; i++) st.rejected("category " + i);          // an attacker cannot grow it without bound
+    assertTrue(st.drain().length() < 600);
+  }
+
+  @Test void ruleMappingOntoAnExistingUserIsWarnedAbout() throws Exception {
+    AuthConfig c = AuthConfig.parse(config(source("t", "http://t", ".*", "svc-user")));
+    assertTrue(c.warnings.stream().anyMatch(w -> w.contains("EXISTING SonarQube user")), c.warnings.toString());
+  }
+
   @Test void rejectsSubjectWithoutRule() throws Exception {
     Cluster c = new Cluster("http://t", "k1"); c.publish(web, ISS);
     var r = verifier(config(source("t", "http://t", "system:serviceaccount:ci:other", "u"))).verify(token(c, Map.of()));

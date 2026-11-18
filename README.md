@@ -9,7 +9,7 @@ pod ──(projected SA token, aud=sonarqube)──▶ SonarQube ──▶ sonar
          issuer's /.well-known + JWKS  ◀─────────┘          match a rule → act as a (auto-provisioned) SonarQube user, scoped to its projects
 ```
 
-- **Nothing stored in pipelines**; tokens expire in minutes.
+- **Nothing stored in pipelines**; tokens expire in minutes. (Revocation is by expiry only — keep tokens short-lived.)
 - **No extra components**: read keys straight from a Kubernetes API server, from a static key file, or from any https OIDC issuer.
 - **Several issuers at once** (e.g. a Jenkins cluster and a Tekton cluster), even when they share the default Kubernetes issuer string.
 - **Least privilege**: users are auto-provisioned into groups you choose; a JWT session can only call the scanner's endpoints and, with

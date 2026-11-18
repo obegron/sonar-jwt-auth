@@ -151,6 +151,8 @@ public final class AuthConfig {
             for (String ph : JwtVerifier.placeholderNames(tpl)) if (!known.contains(ph))
               problems.add(n + ": unknown placeholder ${" + ph + "} in '" + tpl + "' (available: " + known + ")");
           }
+          if (!r.autoProvision)
+            warnings.add(n + ": rule '" + r.subject + "' maps onto the EXISTING SonarQube user '" + r.login + "': make sure it is a dedicated service account, never a human or an administrator");
           if (r.autoProvision && r.projectKeyPattern == null)
             warnings.add(n + ": rule '" + r.subject + "' has autoProvision but no projectKeyPattern: every matching identity can create and overwrite ANY project (Execute Analysis and Create Projects are global permissions)");
           if (r.projectKeyPattern != null && r.projectKeyPattern.matches(".*\\$\\{\\w+}-.*"))

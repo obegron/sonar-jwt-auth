@@ -15,11 +15,17 @@ The same jar (built against 26.10) runs the full integration test in a real Sona
 
 The Helm values (`deploy/helm/values-sonar-jwt-auth.yaml`) and the "Kubernetes API server" key source are installed and exercised for real, with the official chart (2026.5.x) in k3d, by the `k8s-e2e` CI job. The integration test also runs against an external PostgreSQL (`DB=postgres`, CI job `integration-postgres`). What has **not** been done: a published release/image and managed-cloud issuers (EKS/GKE).
 Other editions and multi-node (DCE) SonarQube are untested.
-**Upgrade procedure:** (1) read the release notes for a jar built for the new version, (2) upgrade the jar and SonarQube together,
+**Upgrade procedure:** (the weekly `compat-latest` run tells you in advance whether the newest SonarQube breaks it) (1) read the release notes for a jar built for the new version, (2) upgrade the jar and SonarQube together,
 (3) check the boot log for `extension registered`, (4) run `scripts/integration/run.sh` against a staging instance.
 **Rollback:** remove the `-javaagent` option for this jar (SonarQube then behaves as if it was never installed; provisioned users and projects stay).
 
+## Supported and unsupported
+- **Supported (tested in CI):** single-node SonarQube Community Build 26.9–26.11 (26.10 primary), embedded H2 and external PostgreSQL 17, Docker and the official Helm chart on Kubernetes, key sources "Kubernetes API server", "jwksFile" and "https discovery".
+- **Unverified / unsupported:** SonarQube Data Center Edition and other multi-node setups (provisioning/group re-sync state is per node), other editions, 25.x and older, managed-cloud issuers (EKS/GKE; use https discovery, untested), databases other than PostgreSQL.
+- A scheduled CI run (`compat-latest`, weekly) tests the shipped jar against the newest Community Build tag so an incompatible upstream release shows up as a red run before you upgrade.
+
 ## Security model, and what it does not do
+- **Revocation is by expiry only.** A leaked token works until it expires: use short-lived tokens (Kubernetes `expirationSeconds: 600`) and a matching `maxTokenLifetimeSeconds` (900).
 - A token is accepted only if: RS256/ES256 signature verifies with a key from the issuer's JWKS; `iss` matches a source; `aud` contains an accepted audience;
   `exp` valid and `exp − iat` ≤ `maxTokenLifetimeSeconds`; `sub` matches a rule. Anything claiming a configured issuer but failing is **rejected**, never downgraded.
 - A JWT session can only call the scanner endpoints in `allowedPathPrefixes`, and with `projectKeyPattern` only the projects it names. Requests whose path
@@ -32,6 +38,14 @@ Other editions and multi-node (DCE) SonarQube are untested.
 - Widening `allowedPathPrefixes` weakens project scoping (only the built-in scanner endpoints are scoped precisely).
 - Provisioned groups are re-synced every 5 minutes and overwrite manual membership changes.
 - No metrics endpoint yet; use the log lines below. Repeated rejections are logged at most once a minute per category.
+
+## Observability and alerting
+There is no metrics endpoint; the extension logs (logger `io.github.obegron.sonarjwt.*`, same file/stdout as SonarQube):
+- once per start: `extension registered`, `loaded N source(s)`, `source 'x': loaded N signing key(s)`, and `config warning:` lines for risky config;
+- every 5 minutes, only if something happened: `jwt-auth: since last report: authenticated=… provisioned=… denied(scope/path/user)=… rejected=… [reason: n]`.
+
+Alert on (log-based, e.g. Loki/ELK/CloudWatch filters): any `ERROR` from `io.github.obegron.sonarjwt`; the *absence* of `extension registered` after a SonarQube start;
+`DISABLED` (extension off); `key refresh failed` repeating (issuer unreachable); a sudden jump in `rejected=` (expired tokens, clock skew, rotated keys) or `denied=` (a pipeline reaching outside its scope).
 
 ## Log reference (logger `io.github.obegron.sonarjwt.*`)
 | Message (start) | Meaning / action |

@@ -30,6 +30,8 @@ jobs:
       - run: mvn -B versions:set -DnewVersion=$VERSION -DgenerateBackupPoms=false && mvn -B verify
       - run: scripts/integration/run.sh
       - run: cp target/sonar-jwt-auth-$VERSION.jar docker/sonar-jwt-auth.jar
+      - name: Checksums
+        run: (cd target && sha256sum sonar-jwt-auth-$VERSION.jar) > SHA256SUMS && cat SHA256SUMS
       - name: Build init-container image
         run: docker build -t ghcr.io/${{ github.repository_owner }}/sonar-jwt-auth-init:$VERSION -f docker/Dockerfile.init docker
       - name: Publish image
@@ -39,4 +41,4 @@ jobs:
           docker push ghcr.io/${{ github.repository_owner }}/sonar-jwt-auth-init:$VERSION
       - uses: softprops/action-gh-release@v3
         if: env.PUBLISH == 'true'
-        with: {files: "target/sonar-jwt-auth-*.jar", generate_release_notes: true}
+        with: {files: "target/sonar-jwt-auth-*.jar\nSHA256SUMS", generate_release_notes: true}

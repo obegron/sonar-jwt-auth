@@ -29,6 +29,7 @@ public class JwtServiceAuthentication implements ServiceAuthentication {
   private static final Logger LOG = LoggerFactory.getLogger(JwtServiceAuthentication.class);
   private static final long RESYNC_MS = 5 * 60_000L;
 
+  private final Stats stats = new Stats();
   private final DbClient db;
   private final UserSessionFactory sessions;
   private final UserRegistrar registrar;
@@ -41,6 +42,8 @@ public class JwtServiceAuthentication implements ServiceAuthentication {
 
   public JwtServiceAuthentication(DbClient db, UserSessionFactory sessions, UserRegistrar registrar) {
     this(db, sessions, registrar, new ConfigHolder(Clock.systemUTC()));
+    java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> { Thread t = new Thread(r, "jwt-auth-stats"); t.setDaemon(true); return t; })
+        .scheduleWithFixedDelay(() -> { String line = stats.drain(); if (line != null) LOG.info(line); }, 5, 5, java.util.concurrent.TimeUnit.MINUTES);
   }
 
   JwtServiceAuthentication(DbClient db, UserSessionFactory sessions, UserRegistrar registrar, ConfigHolder config) {
@@ -65,6 +68,7 @@ public class JwtServiceAuthentication implements ServiceAuthentication {
 
     JwtVerifier.Result result = verifier.verify(token);
     if (result instanceof JwtVerifier.Rejected r) {
+      stats.rejected(Log.category(r.reason()));
       Log.throttledWarn(LOG, "rejected:" + Log.category(r.reason()), "jwt-auth: rejected token for " + Log.clean(req.getMethod()) + " " + Log.clean(req.getRequestURI()) + ": " + r.reason());
       return Optional.empty();
     }
@@ -72,13 +76,15 @@ public class JwtServiceAuthentication implements ServiceAuthentication {
 
     String uri = req.getRequestURI(), ctx = req.getContextPath();
     String path = Scope.canonicalPath(uri.startsWith(ctx) ? uri.substring(ctx.length()) : uri);
-    if (path == null) { Log.throttledWarn(LOG, "path:" + ok.subject(), "jwt-auth: refused suspicious request path from " + Log.clean(ok.subject()) + ": " + Log.clean(uri)); return Optional.empty(); }
+    if (path == null) { stats.denied(); Log.throttledWarn(LOG, "path:" + ok.subject(), "jwt-auth: refused suspicious request path from " + Log.clean(ok.subject()) + ": " + Log.clean(uri)); return Optional.empty(); }
     if (!Scope.pathAllowed(path, ok.allowedPathPrefixes())) {
+      stats.denied();
       Log.throttledWarn(LOG, "denied-path:" + ok.subject(), "jwt-auth: " + Log.clean(ok.subject()) + " (" + ok.source() + ") may not call " + path + " (add it to allowedPathPrefixes if intended)");
       return Optional.empty();
     }
     String violation = Scope.violation(path, req::getParameterValues, ok.projectKeyPattern());
     if (violation != null) {
+      stats.denied();
       Log.throttledWarn(LOG, "scope:" + ok.subject(), "jwt-auth: " + Log.clean(ok.subject()) + " (" + ok.source() + ") denied on " + path + ": " + violation);
       // Not an exception: a ForbiddenException thrown here is not handled by SonarQube's authentication layer (HTTP 500). Declining leaves
       // the JWT unrecognised, so the request ends in the normal 401 and the reason is in the log.
@@ -86,7 +92,8 @@ public class JwtServiceAuthentication implements ServiceAuthentication {
     }
 
     UserDto user = findOrProvision(ok);
-    if (user == null) return Optional.empty();
+    if (user == null) { stats.denied(); return Optional.empty(); }
+    stats.accepted();
     LOG.debug("jwt-auth: {} ({}) -> user {} for {} {}", ok.subject(), ok.source(), user.getLogin(), req.getMethod(), path);
     return Optional.of(sessions.create(user, false));
   }
@@ -128,6 +135,7 @@ public class JwtServiceAuthentication implements ServiceAuthentication {
                 .setName(prov.name()).setGroups(new HashSet<>(prov.groups())).build())
             .setProvider(provider).setSource(AuthenticationEvent.Source.external(provider)).build());
         lastSync.put(ok.login(), System.currentTimeMillis());
+        if (ours == null) stats.provisioned();
         if (ours == null) LOG.info("jwt-auth: provisioned user '{}' (login {}) for {} ({}) in groups {}", ok.login(), registered.getLogin(), Log.clean(ok.subject()), ok.source(), prov.groups());
         return registered;
       } catch (RuntimeException e) {
