@@ -26,6 +26,9 @@ python3 scripts/integration/jwt_tool.py jwks "$W" > "$W/cfg/file-jwks.json"
 python3 - "$W/cfg/jwt-auth.json" <<'PY'
 import json,sys
 p=sys.argv[1]; c=json.load(open(p))
+# many namespaces, one rule: every appN namespace gets its own user and its own project-key prefix
+c["sources"][0]["rules"].insert(0,{"subject":"system:serviceaccount:(?<ns>app[0-9]+):pipeline","login":"ns_${ns}","name":"Tekton ${ns}","autoProvision":True,
+  "groups":["tekton-scanners"],"projectKeyPattern":"${ns}-.*"})
 c["sources"].append({"name":"filesrc","issuer":"https://file.test.invalid","jwksFile":"/opt/sonarqube/jwt-auth/file-jwks.json","audiences":["sonarqube"],
   "rules":[{"subject":"system:serviceaccount:(?<ns>[a-z0-9-]+):(?<sa>[a-z0-9-]+)","login":"file_${ns}_${sa}","autoProvision":True,"groups":["tekton-scanners"],"projectKeyPattern":"file-.*"}]})
 json.dump(c,open(p,"w"))
@@ -58,6 +61,17 @@ FILE_TOK=$(python3 scripts/integration/jwt_tool.py mint "$W" https://file.test.i
 check "second source (static jwksFile, no network) works"  "$(code -X POST -H "Authorization: Bearer $FILE_TOK" $S/api/projects/create -d name=f -d project=file-a)" 200
 check "...and is scoped by its own projectKeyPattern"        "$(code -X POST -H "Authorization: Bearer $FILE_TOK" $S/api/projects/create -d name=f -d project=tekton-z)" 401
 check "...and its tokens do not work for the other source's scope" "$(code -X POST -H "Authorization: Bearer $OK" $S/api/projects/create -d name=f -d project=file-b)" 401
+echo "many namespaces, one rule (app1/app2/app3):"
+for n in app1 app2 app3; do
+  T=$(mint --sub system:serviceaccount:$n:pipeline)
+  check "$n can create its own project ($n-web)" "$(code -X POST -H "Authorization: Bearer $T" $S/api/projects/create -d name=w -d project=$n-web)" 200
+done
+T1=$(mint --sub system:serviceaccount:app1:pipeline)
+check "app1 cannot touch app2's projects"        "$(code -X POST -H "Authorization: Bearer $T1" $S/api/projects/create -d name=w -d project=app2-api)" 401
+check "app1 cannot touch an unprefixed project"  "$(code -X POST -H "Authorization: Bearer $T1" $S/api/projects/create -d name=w -d project=web)" 401
+check "a namespace outside the rule (app1x) is refused" "$(code -X POST -H "Authorization: Bearer $(mint --sub system:serviceaccount:app1x:pipeline)" $S/api/projects/create -d name=w -d project=app1x-web)" 401
+check "a different ServiceAccount in app1 is refused"   "$(code -X POST -H "Authorization: Bearer $(mint --sub system:serviceaccount:app1:other)" $S/api/projects/create -d name=w -d project=app1-x)" 401
+check "three namespaces -> three distinct users" "$(curl -s "${ADMIN[@]}" "$S/api/users/search?q=Tekton+app&ps=20" | python3 -c 'import sys,json;print(len([u for u in json.load(sys.stdin)["users"] if u.get("externalProvider")=="jwt-auth"]))')" 3
 check "ordinary SonarQube token still works"            "$(code -u "$(curl -s "${ADMIN[@]}" -X POST $S/api/user_tokens/generate -d name=t | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])'):" $S/api/users/current)" 200
 
 echo "concurrent first use of a NEW identity (8 parallel requests):"

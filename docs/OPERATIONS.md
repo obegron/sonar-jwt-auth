@@ -1,13 +1,17 @@
 # Operating sonar-jwt-auth
 
 ## Compatibility
-The same jar (built against 26.10) is exercised by the full integration test in a real SonarQube of each of these versions in CI:
+**Supported: SonarQube Community Build 26.x. 26.10 is the primary target** — it is the release that removed unauthenticated analysis submission, which is what this project replaces.
+Older lines are out of scope: the `ServiceAuthentication` hook this relies on does not exist in 25.1 (checked against the 25.1.0 server jar), and the extension would disable itself there.
+
+The same jar (built against 26.10) runs the full integration test in a real SonarQube of each of these versions in CI:
 
 | SonarQube Community Build | Evidence |
 |---|---|
-| 26.10.x | integration test (CI) + compile/unit (CI) + manual k3d run with sonarqube-community-branch-plugin 26.10.0 |
-| 26.9.x, 26.11.x | integration test (CI) + compile/unit (CI); see the CI badge/run for the current result |
-| anything else | unsupported: if an internal API it needs is missing, the extension disables itself with an ERROR at startup. That guard checks the classes and methods it calls, **not** every behaviour change or the container wiring, so test upgrades on staging |
+| **26.10.x** (primary) | integration test (CI) + compile/unit (CI) + Kubernetes/Helm end-to-end (CI) + manual k3d run with sonarqube-community-branch-plugin 26.10.0 |
+| 26.9.x, 26.11.x | integration test (CI) + compile/unit (CI) |
+| other 26.x | expected to work, **not tested**: add the version to the CI matrix before relying on it |
+| 25.x and older | unsupported; the extension disables itself with an ERROR if an internal API it needs is missing. That guard checks the classes and methods it calls, **not** every behaviour change or the container wiring, so test upgrades on staging |
 
 The Helm values (`deploy/helm/values-sonar-jwt-auth.yaml`) and the "Kubernetes API server" key source are installed and exercised for real, with the official chart (2026.5.x) in k3d, by the `k8s-e2e` CI job. What has **not** been done: a published release/image, managed-cloud issuers (EKS/GKE), and non-H2 databases.
 Other editions and multi-node (DCE) SonarQube are untested.

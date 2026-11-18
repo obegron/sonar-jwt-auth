@@ -1,7 +1,7 @@
 # Installing sonar-jwt-auth
 
 ## 1. Check compatibility
-The extension uses SonarQube internals, so it only supports specific Community Build versions ([matrix](OPERATIONS.md#compatibility)).
+The extension uses SonarQube internals, so it only supports specific Community Build versions (**26.x, 26.10 primary**) ([matrix](OPERATIONS.md#compatibility)).
 On a version where an internal API it uses is missing it **switches itself off with an ERROR in the log**. That check covers the classes and methods it calls, not every possible behaviour change, so always try an upgrade on a staging instance first (`scripts/integration/run.sh`).
 
 ## 2. Get the jar

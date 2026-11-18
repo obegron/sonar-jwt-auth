@@ -6,10 +6,10 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 CLUSTER=${CLUSTER:-sjat-e2e}; NS=sonarqube; PF_PORT=${PF_PORT:-19001}
 JAR=$(ls target/sonar-jwt-auth-*.jar | grep -v sources | head -1); [ -f "$JAR" ] || { echo "build first: mvn package"; exit 2; }
-pass=0; fail=0
+pass=0; fail=0; PF_PID=""
 check(){ if [ "$2" = "$3" ]; then echo "  ok   $1"; pass=$((pass+1)); else echo "  FAIL $1 (expected $3, got $2)"; fail=$((fail+1)); fi; }
 W=$(mktemp -d)
-cleanup(){ kill $PF_PID 2>/dev/null; if [ "$fail" -gt 0 ] || [ "${DEBUG:-}" = 1 ]; then
+cleanup(){ [ -n "$PF_PID" ] && kill $PF_PID 2>/dev/null; if [ "$fail" -gt 0 ] || [ "${DEBUG:-}" = 1 ]; then
     echo "=== diagnostics ==="; kubectl -n $NS get pods -o wide 2>&1 | head
     echo "--- pod status:"; kubectl -n $NS get pod sonarqube-sonarqube-0 -o jsonpath='{.status.phase} {.status.reason} {.status.message}{"\n"}{range .status.initContainerStatuses[*]}init {.name}: {.state}{"\n"}{end}{range .status.containerStatuses[*]}{.name}: {.state} last={.lastState}{"\n"}{end}' 2>&1 | cut -c1-400
     echo "--- events:"; kubectl -n $NS get events --sort-by=.lastTimestamp 2>&1 | tail -20 | cut -c1-300
