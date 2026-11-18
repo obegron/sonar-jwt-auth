@@ -18,7 +18,7 @@ pod ──(projected SA token, aud=sonarqube)──▶ SonarQube ──▶ sonar
 - Works alongside [sonarqube-community-branch-plugin](https://github.com/mc1arke/sonarqube-community-branch-plugin).
 
 ## Quick start
-1. `scripts/build.sh` (builds and tests the jar; release jars once published) → [docs/INSTALL.md](docs/INSTALL.md): config file, Docker / Helm install, permissions, CI usage.
+1. Download the [release](https://github.com/obegron/sonar-jwt-auth/releases) jar (with `SHA256SUMS`) or `scripts/build.sh` → [docs/INSTALL.md](docs/INSTALL.md): config file, Docker / Helm install, permissions, CI usage.
 2. Prove it works on your machine in ~3 minutes: `scripts/integration/run.sh` (needs docker + `pip install cryptography`).
 3. Operate it: [docs/OPERATIONS.md](docs/OPERATIONS.md) — compatibility matrix, upgrade/rollback, security model, log reference.
 

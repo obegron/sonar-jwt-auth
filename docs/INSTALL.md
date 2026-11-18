@@ -4,13 +4,20 @@
 The extension uses SonarQube internals, so it only supports specific Community Build versions (**26.x, 26.10 primary**) ([matrix](OPERATIONS.md#compatibility)).
 On a version where an internal API it uses is missing it **switches itself off with an ERROR in the log**. That check covers the classes and methods it calls, not every possible behaviour change, so always try an upgrade on a staging instance first (`scripts/integration/run.sh`).
 
-## 2. Build the jar (and the init image, for Kubernetes)
+## 2. Get the jar (and the init image, for Kubernetes)
+**Download a release** — <https://github.com/obegron/sonar-jwt-auth/releases> — and verify it:
 ```bash
-scripts/build.sh                                   # needs docker, Java 21, Maven; fetches the compile-time server jar, runs the tests -> target/sonar-jwt-auth-<version>.jar
-cp target/sonar-jwt-auth-*.jar docker/sonar-jwt-auth.jar
-docker build -t <your-registry>/sonar-jwt-auth-init:<version> -f docker/Dockerfile.init docker && docker push <your-registry>/sonar-jwt-auth-init:<version>   # Kubernetes / Helm only
+gh release download v0.1.0 -R obegron/sonar-jwt-auth            # or download sonar-jwt-auth-0.1.0.jar and SHA256SUMS from the release page
+sha256sum -c SHA256SUMS && mkdir -p docker && cp sonar-jwt-auth-0.1.0.jar docker/sonar-jwt-auth.jar     # run from a checkout of this repo, for the Docker route
 ```
-Once the maintainer publishes a release, the jar is also attached to the GitHub release and `ghcr.io/obegron/sonar-jwt-auth-init:<version>` exists (a private package until made public, or use an `imagePullSecret`).
+Each release also publishes the init-container image `ghcr.io/obegron/sonar-jwt-auth-init:<version>` (public), which the Helm values use as is.
+
+**Or build from source** (needs docker, Java 21, Maven):
+```bash
+scripts/build.sh                                   # fetches the compile-time server jar, runs the tests -> target/sonar-jwt-auth-<version>.jar
+cp target/sonar-jwt-auth-*.jar docker/sonar-jwt-auth.jar
+docker build -t <your-registry>/sonar-jwt-auth-init:<version> -f docker/Dockerfile.init docker && docker push <your-registry>/sonar-jwt-auth-init:<version>   # Kubernetes / Helm only, if you host your own image
+```
 
 ## 3. Tell SonarQube where the issuer's public keys are
 Pick one `source` style per issuer. Nothing to install on the issuer side in any of them.
@@ -96,7 +103,7 @@ The jar is a **javaagent**, not a plugin: do **not** put it in `extensions/plugi
 **Before the first scan, create the groups your rules name** (step 6) — provisioned users only get the permissions of groups that exist.
 
 ### a) Docker
-The jar from step 2 is already at `docker/sonar-jwt-auth.jar` (if you downloaded a release jar instead, copy it there).
+The jar from step 2 is already at `docker/sonar-jwt-auth.jar`.
 ```bash
 docker build -t sonarqube-jwt docker
 mkdir -p jwt-auth && cp my-jwt-auth.json jwt-auth/jwt-auth.json                              # your config from step 4
@@ -110,10 +117,9 @@ for production add an external PostgreSQL (`-e SONAR_JDBC_URL=... -e SONAR_JDBC_
 helm repo add sonarqube https://SonarSource.github.io/helm-chart-sonarqube && helm repo update
 kubectl create namespace sonarqube
 kubectl -n sonarqube create configmap sonar-jwt-auth-config --from-file=jwt-auth.json=my-jwt-auth.json     # your config from step 4
-# edit deploy/helm/values-sonar-jwt-auth.yaml: image -> the init image you pushed in step 2
 helm upgrade --install sonarqube sonarqube/sonarqube -n sonarqube -f deploy/helm/values-sonar-jwt-auth.yaml --set monitoringPasscode=<secret>
 ```
-The values reference your init image (`your-registry.example.org/sonar-jwt-auth-init:0.1.0`, built in step 2): replace both the registry **and the tag** with what you pushed (the version is in the jar file name, e.g. `0.1.0-SNAPSHOT`).
+The values use the published init image `ghcr.io/obegron/sonar-jwt-auth-init:0.1.0` (the tag must match the SonarQube version you tested against, see [OPERATIONS.md](OPERATIONS.md#compatibility)). If you build and host your own, replace the registry **and the tag** in the values file.
 **Database:** recent chart versions no longer bundle PostgreSQL — without `jdbcOverwrite` SonarQube uses its embedded H2, which is for evaluation only. For production configure an external database as usual.
 This install path is run for real, with the official chart, by the `k8s-e2e` CI job.
 ### c) Together with sonarqube-community-branch-plugin

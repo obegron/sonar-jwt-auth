@@ -30,7 +30,7 @@ k3d image import sonar-jwt-auth-init:e2e sonarsource/sonar-scanner-cli -c $CLUST
 helm repo add sonarqube https://SonarSource.github.io/helm-chart-sonarqube >/dev/null 2>&1; helm repo update >/dev/null 2>&1
 kubectl create namespace $NS >/dev/null
 kubectl -n $NS create configmap sonar-jwt-auth-config --from-file=jwt-auth.json=deploy/jwt-auth-config.k8s-e2e.json >/dev/null
-sed 's#your-registry.example.org/sonar-jwt-auth-init:[0-9.A-Za-z-]*#sonar-jwt-auth-init:e2e#' deploy/helm/values-sonar-jwt-auth.yaml > "$W/values.yaml"
+sed 's#ghcr.io/obegron/sonar-jwt-auth-init:[0-9.A-Za-z-]*#sonar-jwt-auth-init:e2e#' deploy/helm/values-sonar-jwt-auth.yaml > "$W/values.yaml"
 echo "runner disk before install:"; df -h / | tail -1
 echo "helm install (official chart, embedded H2: test only)..."
 helm install sonarqube sonarqube/sonarqube -n $NS -f "$W/values.yaml" --set monitoringPasscode=e2e-passcode \

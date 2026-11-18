@@ -13,7 +13,7 @@ The same jar (built against 26.10) runs the full integration test in a real Sona
 | other 26.x | expected to work, **not tested**: add the version to the CI matrix before relying on it |
 | 25.x and older | unsupported; the extension disables itself with an ERROR if an internal API it needs is missing. That guard checks the classes and methods it calls, **not** every behaviour change or the container wiring, so test upgrades on staging |
 
-The Helm values (`deploy/helm/values-sonar-jwt-auth.yaml`) and the "Kubernetes API server" key source are installed and exercised for real, with the official chart (2026.5.x) in k3d, by the `k8s-e2e` CI job. The integration test also runs against an external PostgreSQL (`DB=postgres`, CI job `integration-postgres`). What has **not** been done: a published release/image and managed-cloud issuers (EKS/GKE).
+The Helm values (`deploy/helm/values-sonar-jwt-auth.yaml`) and the "Kubernetes API server" key source are installed and exercised for real, with the official chart (2026.5.x) in k3d, by the `k8s-e2e` CI job. The integration test also runs against an external PostgreSQL (`DB=postgres`, CI job `integration-postgres`). What has **not** been done: managed-cloud issuers (EKS/GKE). Releases are not signed (SHA-256 checksums only).
 Other editions and multi-node (DCE) SonarQube are untested.
 **Upgrade procedure:** (the weekly `compat-latest` run tells you in advance whether the newest SonarQube breaks it) (1) read the release notes for a jar built for the new version, (2) upgrade the jar and SonarQube together,
 (3) check the boot log for `extension registered`, (4) run `scripts/integration/run.sh` against a staging instance.
