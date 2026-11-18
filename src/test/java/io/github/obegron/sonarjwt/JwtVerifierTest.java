@@ -45,7 +45,7 @@ class JwtVerifierTest {
   @BeforeEach void setUp() { clock = new MutableClock(Instant.parse("2026-11-18T12:00:00Z")); web = new HashMap<>(); fetches = 0; }
 
   JwtVerifier verifier(String json) throws Exception {
-    return new JwtVerifier(AuthConfig.parse(json), url -> { fetches++; String b = web.get(url); if (b == null) throw new IllegalStateException("404 " + url); return b; }, clock);
+    return new JwtVerifier(AuthConfig.parse(json), (url, auth) -> { fetches++; String b = web.get(url); if (b == null) throw new IllegalStateException("404 " + url); return b; }, clock);
   }
 
   static String config(String... sources) { return "{\"sources\":[" + String.join(",", sources) + "]}"; }
@@ -126,6 +126,97 @@ class JwtVerifierTest {
     JwtVerifier v = verifier(config(source("jenkins", "http://a", ".*", "gw-${source}"), source("tekton", "http://b", ".*", "gw-${source}")));
     assertEquals("gw-jenkins", assertInstanceOf(JwtVerifier.Accepted.class, v.verify(token(a, Map.of()))).login());
     assertEquals("gw-tekton", assertInstanceOf(JwtVerifier.Accepted.class, v.verify(token(b, Map.of()))).login());
+  }
+
+  // ---------------- key sources: jwksFile, jwksUri, host pinning, reload, https + CA + bearer
+
+  @Test void jwksFileNeedsNoNetworkAndIsReReadOnRotation() throws Exception {
+    Cluster c = new Cluster("http://unused", "k1");
+    java.nio.file.Path f = java.nio.file.Files.createTempFile("jwks", ".json"); java.nio.file.Files.writeString(f, c.jwks());
+    JwtVerifier v = verifier(config("{\"name\":\"f\",\"issuer\":\"" + ISS + "\",\"jwksFile\":\"" + f + "\",\"audiences\":[\"sonarqube\"],\"rules\":[{\"subject\":\".*\",\"login\":\"file-user\"}]}"));
+    assertEquals("file-user", assertInstanceOf(JwtVerifier.Accepted.class, v.verify(token(c, Map.of()))).login());
+    assertEquals(0, fetches);
+    Cluster rotated = new Cluster("http://unused", "k2");
+    java.nio.file.Files.writeString(f, rotated.jwks());
+    clock.advance(Duration.ofSeconds(11));
+    assertEquals("file-user", assertInstanceOf(JwtVerifier.Accepted.class, v.verify(token(rotated, Map.of()))).login());
+  }
+
+  @Test void jwksUriSkipsDiscoveryAndJwksFileExcludesUrls() throws Exception {
+    Cluster c = new Cluster("http://t", "k1"); web.put("http://t/keys", c.jwks()); // no discovery document at all
+    JwtVerifier v = verifier(config("{\"name\":\"u\",\"issuer\":\"" + ISS + "\",\"jwksUri\":\"http://t/keys\",\"allowInsecureHttp\":true,\"audiences\":[\"sonarqube\"],\"rules\":[{\"subject\":\".*\",\"login\":\"uri-user\"}]}"));
+    assertInstanceOf(JwtVerifier.Accepted.class, v.verify(token(c, Map.of())));
+    assertThrows(IllegalArgumentException.class, () -> AuthConfig.parse(config("{\"name\":\"u\",\"issuer\":\"" + ISS + "\",\"jwksFile\":\"/x\",\"jwksUri\":\"https://h/k\",\"audiences\":[\"a\"],\"rules\":[{\"subject\":\".*\",\"login\":\"uu\"}]}")));
+  }
+
+  @Test void jwksUriFromDiscoveryMustStayOnTheDiscoveryHost() throws Exception {
+    Cluster c = new Cluster("http://t", "k1");
+    web.put("http://t/.well-known/openid-configuration", JSON.writeValueAsString(Map.of("issuer", ISS, "jwks_uri", "http://elsewhere/jwks")));
+    web.put("http://elsewhere/jwks", c.jwks());
+    String strict = config(source("t", "http://t", ".*", "uu"));
+    assertInstanceOf(JwtVerifier.Rejected.class, verifier(strict).verify(token(c, Map.of())));
+    String relaxed = strict.replace("\"allowInsecureHttp\":true", "\"allowInsecureHttp\":true,\"allowForeignJwksHost\":true");
+    assertInstanceOf(JwtVerifier.Accepted.class, verifier(relaxed).verify(token(c, Map.of())));
+  }
+
+  @Test void reloadingConfigKeepsCachedKeysOfUnchangedSources() throws Exception {
+    Cluster c = new Cluster("http://t", "k1"); c.publish(web, ISS);
+    String json = config(source("t", "http://t", ".*", "uu"));
+    KeySet.Fetcher f = (url, auth) -> { fetches++; return web.get(url); };
+    JwtVerifier first = new JwtVerifier(AuthConfig.parse(json), f, clock);
+    assertInstanceOf(JwtVerifier.Accepted.class, first.verify(token(c, Map.of())));
+    int afterFirst = fetches;
+    web.clear(); // issuer now unreachable
+    JwtVerifier reloaded = new JwtVerifier(AuthConfig.parse(json.replace("\"uu\"", "\"vv\"")), clock, first); // only a rule changed
+    assertEquals("vv", assertInstanceOf(JwtVerifier.Accepted.class, reloaded.verify(token(c, Map.of()))).login());
+    assertEquals(afterFirst, fetches);
+  }
+
+  @Test void configRejectsAdjacentPlaceholdersAndWildcardWithScope() {
+    String head = "{\"name\":\"a\",\"issuer\":\"https://i\",\"audiences\":[\"x\"],";
+    assertThrows(IllegalArgumentException.class, () -> AuthConfig.parse(config(head + "\"rules\":[{\"subject\":\".*\",\"login\":\"ci_${a}${b}\"}]}")));
+    assertThrows(IllegalArgumentException.class, () -> AuthConfig.parse(config(head + "\"allowedPathPrefixes\":[\"*\"],\"rules\":[{\"subject\":\".*\",\"login\":\"fixed-user\",\"projectKeyPattern\":\"a-.*\"}]}")));
+    assertDoesNotThrow(() -> AuthConfig.parse(config(head + "\"allowedPathPrefixes\":[\"*\"],\"rules\":[{\"subject\":\".*\",\"login\":\"fixed-user\"}]}")));
+  }
+
+  @Test void httpsWithPrivateCaAndBearerTokenWorksAndAnUntrustedCaFails() throws Exception {
+    java.nio.file.Path dir = java.nio.file.Files.createTempDirectory("tls");
+    String keytool = System.getProperty("java.home") + "/bin/keytool";
+    run(keytool, "-genkeypair", "-alias", "s", "-keyalg", "RSA", "-keysize", "2048", "-validity", "2", "-dname", "CN=localhost", "-ext", "san=dns:localhost",
+        "-keystore", dir + "/ks.p12", "-storetype", "PKCS12", "-storepass", "changeit", "-keypass", "changeit");
+    run(keytool, "-exportcert", "-rfc", "-alias", "s", "-keystore", dir + "/ks.p12", "-storepass", "changeit", "-file", dir + "/ca.pem");
+    java.security.KeyStore ks = java.security.KeyStore.getInstance("PKCS12");
+    try (var in = java.nio.file.Files.newInputStream(dir.resolve("ks.p12"))) { ks.load(in, "changeit".toCharArray()); }
+    javax.net.ssl.KeyManagerFactory kmf = javax.net.ssl.KeyManagerFactory.getInstance("SunX509"); kmf.init(ks, "changeit".toCharArray());
+    javax.net.ssl.SSLContext ssl = javax.net.ssl.SSLContext.getInstance("TLS"); ssl.init(kmf.getKeyManagers(), null, null);
+    com.sun.net.httpserver.HttpsServer srv = com.sun.net.httpserver.HttpsServer.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+    srv.setHttpsConfigurator(new com.sun.net.httpserver.HttpsConfigurator(ssl));
+    Cluster c = new Cluster("https://localhost:" + srv.getAddress().getPort(), "k1");
+    List<String> sawAuth = java.util.Collections.synchronizedList(new ArrayList<>());
+    String discoveryBody = JSON.writeValueAsString(Map.of("issuer", ISS, "jwks_uri", c.base + "/jwks")), jwksBody = c.jwks();
+    srv.createContext("/", ex -> {
+      sawAuth.add(ex.getRequestURI().getPath() + "=" + ex.getRequestHeaders().getFirst("Authorization"));
+      String body = ex.getRequestURI().getPath().endsWith("openid-configuration") ? discoveryBody : jwksBody;
+      byte[] b = body.getBytes(StandardCharsets.UTF_8); ex.sendResponseHeaders(200, b.length); ex.getResponseBody().write(b); ex.close();
+    });
+    srv.start();
+    try {
+      java.nio.file.Path tok = dir.resolve("token"); java.nio.file.Files.writeString(tok, "sa-token-123\n");
+      String src = "{\"name\":\"k8s\",\"issuer\":\"" + ISS + "\",\"discoveryUrl\":\"" + c.base + "\",\"caFile\":\"" + dir + "/ca.pem\",\"bearerTokenFile\":\"" + tok
+          + "\",\"audiences\":[\"sonarqube\"],\"rules\":[{\"subject\":\".*\",\"login\":\"tls-user\"}]}";
+      JwtVerifier trusted = new JwtVerifier(AuthConfig.parse(config(src)), clock, null);
+      assertEquals("tls-user", assertInstanceOf(JwtVerifier.Accepted.class, trusted.verify(token(c, Map.of()))).login());
+      assertTrue(sawAuth.contains("/.well-known/openid-configuration=Bearer sa-token-123"), sawAuth.toString());
+      // no caFile -> the self-signed certificate is not trusted -> keys never load
+      JwtVerifier untrusted = new JwtVerifier(AuthConfig.parse(config(src.replace("\"caFile\":\"" + dir + "/ca.pem\",", ""))), clock, null);
+      assertInstanceOf(JwtVerifier.Rejected.class, untrusted.verify(token(c, Map.of())));
+    } finally { srv.stop(0); }
+  }
+
+  private static void run(String... cmd) throws Exception {
+    Process p = new ProcessBuilder(cmd).redirectErrorStream(true).start();
+    String out = new String(p.getInputStream().readAllBytes());
+    assertEquals(0, p.waitFor(), out);
   }
 
   @Test void rejectsSubjectWithoutRule() throws Exception {

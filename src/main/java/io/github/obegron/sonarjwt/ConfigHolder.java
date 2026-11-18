@@ -23,11 +23,14 @@ final class ConfigHolder {
   private volatile long lastModified = -1;
 
   ConfigHolder(Clock clock) {
+    this(Path.of(System.getenv(ENV) == null || System.getenv(ENV).isBlank() ? DEFAULT_PATH : System.getenv(ENV)), clock, true);
+  }
+
+  ConfigHolder(Path file, Clock clock, boolean watch) {
     this.clock = clock;
-    String p = System.getenv(ENV);
-    this.file = Path.of(p == null || p.isBlank() ? DEFAULT_PATH : p);
+    this.file = file;
     reloadIfChanged();
-    Executors.newSingleThreadScheduledExecutor(r -> { Thread t = new Thread(r, "jwt-auth-config"); t.setDaemon(true); return t; })
+    if (watch) Executors.newSingleThreadScheduledExecutor(r -> { Thread t = new Thread(r, "jwt-auth-config"); t.setDaemon(true); return t; })
         .scheduleWithFixedDelay(this::reloadIfChanged, 10, 10, TimeUnit.SECONDS);
   }
 
@@ -43,7 +46,7 @@ final class ConfigHolder {
       long m = Files.getLastModifiedTime(file).toMillis();
       if (m == lastModified) return;
       AuthConfig cfg = AuthConfig.load(file);
-      JwtVerifier v = new JwtVerifier(cfg, clock);
+      JwtVerifier v = new JwtVerifier(cfg, clock, verifier);
       v.warmUp();
       verifier = v;
       lastModified = m;

@@ -41,6 +41,16 @@ public final class AuthConfig {
     public String discoveryUrl;
     /** Needed when discovery or the JWKS is served over plain http (e.g. in a test cluster). Off by default. */
     public boolean allowInsecureHttp;
+    /** Skip discovery and fetch the keys from this URL (https). Needed e.g. for the Kubernetes API server, whose advertised jwks_uri may not be reachable. */
+    public String jwksUri;
+    /** Skip the network entirely: read the JWKS from this file (e.g. a mounted ConfigMap holding `kubectl get --raw /openid/v1/jwks`). Re-read when it changes. */
+    public String jwksFile;
+    /** PEM file with the CA(s) to trust for https discovery/JWKS (private CA, or the in-cluster /var/run/secrets/kubernetes.io/serviceaccount/ca.crt). */
+    public String caFile;
+    /** File holding a bearer token sent to the discovery URL (e.g. the pod's ServiceAccount token to read a Kubernetes API server). Re-read on every fetch. */
+    public String bearerTokenFile;
+    /** By default the jwks_uri announced by discovery must be on the same host as discoveryUrl. */
+    public boolean allowForeignJwksHost;
     /** At least one must appear in the token's {@code aud}. */
     public List<String> audiences = List.of();
     /** First matching rule wins. */
@@ -50,6 +60,12 @@ public final class AuthConfig {
     public long clockSkewSeconds = 60;
     /** Tokens valid for longer than this (exp - iat) are refused, so a leaked long-lived token is not accepted. 0 disables the check. */
     public long maxTokenLifetimeSeconds = 86400;
+
+    /** Sources with the same identity share cached keys across config reloads. */
+    String keyIdentity() {
+      return String.join("|", String.valueOf(issuer), effectiveDiscoveryUrl(), String.valueOf(jwksUri), String.valueOf(jwksFile),
+          String.valueOf(caFile), String.valueOf(bearerTokenFile), String.valueOf(allowInsecureHttp), String.valueOf(allowForeignJwksHost));
+    }
 
     String effectiveDiscoveryUrl() { return discoveryUrl == null || discoveryUrl.isBlank() ? issuer : discoveryUrl; }
     List<String> effectiveAllowedPaths() { return allowedPathPrefixes.isEmpty() ? DEFAULT_ALLOWED_PATHS : allowedPathPrefixes; }
@@ -103,13 +119,18 @@ public final class AuthConfig {
       if (s.allowedPathPrefixes != null) for (String ap : s.allowedPathPrefixes)
         if (!ap.equals("*") && (!ap.startsWith("/") || ap.contains("..") || ap.contains("%") || ap.contains(";"))) problems.add(n + ": bad allowedPathPrefixes entry: " + ap);
       if (s.clockSkewSeconds < 0 || s.clockSkewSeconds > 600) problems.add(n + ": clockSkewSeconds must be 0..600");
-      if (s.issuer != null) {
-        String url = s.effectiveDiscoveryUrl();
+      if (s.issuer != null && s.jwksFile == null) {
+        String url = s.jwksUri != null ? s.jwksUri : s.effectiveDiscoveryUrl();
         if (!(url.startsWith("https://") || (url.startsWith("http://") && s.allowInsecureHttp)))
-          problems.add(n + ": discoveryUrl must be https (or http with allowInsecureHttp=true): " + url);
+          problems.add(n + ": " + (s.jwksUri != null ? "jwksUri" : "discoveryUrl") + " must be https (or http with allowInsecureHttp=true): " + url);
       }
+      if (s.jwksFile != null && (s.jwksUri != null || s.discoveryUrl != null)) problems.add(n + ": jwksFile cannot be combined with jwksUri/discoveryUrl");
+      boolean scoped = s.rules != null && s.rules.stream().anyMatch(r -> r.projectKeyPattern != null);
+      if (scoped && s.allowedPathPrefixes != null && s.allowedPathPrefixes.contains("*"))
+        problems.add(n + ": allowedPathPrefixes [\"*\"] cannot be combined with projectKeyPattern (scoping could not be guaranteed)");
       if (s.rules != null) for (Rule r : s.rules) {
         if (r.subject == null || r.login == null || r.login.isBlank()) { problems.add(n + ": rule needs subject and login"); continue; }
+        if (r.login.matches(".*\\$\\{\\w+}\\$\\{.*")) problems.add(n + ": adjacent placeholders in login template are ambiguous: " + r.login);
         if (r.login.contains("${") && !r.login.matches("^[A-Za-z0-9_.@-]{2,}.*")) problems.add(n + ": login template must start with literal text: " + r.login);
         if (!r.autoProvision && (!r.groups.isEmpty() || r.name != null)) problems.add(n + ": groups/name require autoProvision=true");
         for (String g : r.groups) if (g == null || g.isBlank() || g.equals("sonar-administrators")) problems.add(n + ": group not allowed: " + g);

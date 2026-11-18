@@ -32,7 +32,7 @@ public class JwtServiceAuthentication implements ServiceAuthentication {
   private final DbClient db;
   private final UserSessionFactory sessions;
   private final UserRegistrar registrar;
-  private final ConfigHolder config = new ConfigHolder(Clock.systemUTC());
+  private final ConfigHolder config;
   private final JwtIdentityProvider provider = new JwtIdentityProvider();
   /** login -> last time name/groups were synced, so the scanner's many requests do not each hit the registrar. */
   private final ConcurrentHashMap<String, Long> lastSync = new ConcurrentHashMap<>();
@@ -40,7 +40,11 @@ public class JwtServiceAuthentication implements ServiceAuthentication {
   private final ConcurrentHashMap<String, Object> locks = new ConcurrentHashMap<>();
 
   public JwtServiceAuthentication(DbClient db, UserSessionFactory sessions, UserRegistrar registrar) {
-    this.db = db; this.sessions = sessions; this.registrar = registrar;
+    this(db, sessions, registrar, new ConfigHolder(Clock.systemUTC()));
+  }
+
+  JwtServiceAuthentication(DbClient db, UserSessionFactory sessions, UserRegistrar registrar, ConfigHolder config) {
+    this.db = db; this.sessions = sessions; this.registrar = registrar; this.config = config;
   }
 
   @Override
@@ -48,7 +52,7 @@ public class JwtServiceAuthentication implements ServiceAuthentication {
     try {
       return doAuthenticate(req);
     } catch (RuntimeException | LinkageError e) {
-      Log.throttledWarn(LOG, "jwt-auth: unexpected error, request left to normal authentication: " + e);
+      Log.throttledWarn(LOG, "error", "jwt-auth: unexpected error, request left to normal authentication: " + e);
       return Optional.empty();
     }
   }
@@ -61,21 +65,21 @@ public class JwtServiceAuthentication implements ServiceAuthentication {
 
     JwtVerifier.Result result = verifier.verify(token);
     if (result instanceof JwtVerifier.Rejected r) {
-      Log.throttledWarn(LOG, "jwt-auth: rejected token for " + Log.clean(req.getMethod()) + " " + Log.clean(req.getRequestURI()) + ": " + r.reason());
+      Log.throttledWarn(LOG, "rejected", "jwt-auth: rejected token for " + Log.clean(req.getMethod()) + " " + Log.clean(req.getRequestURI()) + ": " + r.reason());
       return Optional.empty();
     }
     if (!(result instanceof JwtVerifier.Accepted ok)) return Optional.empty();
 
     String uri = req.getRequestURI(), ctx = req.getContextPath();
     String path = Scope.canonicalPath(uri.startsWith(ctx) ? uri.substring(ctx.length()) : uri);
-    if (path == null) { Log.throttledWarn(LOG, "jwt-auth: refused suspicious request path from " + Log.clean(ok.subject()) + ": " + Log.clean(uri)); return Optional.empty(); }
+    if (path == null) { Log.throttledWarn(LOG, "path:" + ok.subject(), "jwt-auth: refused suspicious request path from " + Log.clean(ok.subject()) + ": " + Log.clean(uri)); return Optional.empty(); }
     if (!Scope.pathAllowed(path, ok.allowedPathPrefixes())) {
-      Log.throttledWarn(LOG, "jwt-auth: " + Log.clean(ok.subject()) + " (" + ok.source() + ") may not call " + path + " (add it to allowedPathPrefixes if intended)");
+      Log.throttledWarn(LOG, "denied-path:" + ok.subject(), "jwt-auth: " + Log.clean(ok.subject()) + " (" + ok.source() + ") may not call " + path + " (add it to allowedPathPrefixes if intended)");
       return Optional.empty();
     }
     String violation = Scope.violation(path, req::getParameterValues, ok.projectKeyPattern());
     if (violation != null) {
-      Log.throttledWarn(LOG, "jwt-auth: " + Log.clean(ok.subject()) + " (" + ok.source() + ") denied on " + path + ": " + violation);
+      Log.throttledWarn(LOG, "scope:" + ok.subject(), "jwt-auth: " + Log.clean(ok.subject()) + " (" + ok.source() + ") denied on " + path + ": " + violation);
       // Not an exception: a ForbiddenException thrown here is not handled by SonarQube's authentication layer (HTTP 500). Declining leaves
       // the JWT unrecognised, so the request ends in the normal 401 and the reason is in the log.
       return Optional.empty();
@@ -97,12 +101,12 @@ public class JwtServiceAuthentication implements ServiceAuthentication {
     if (prov == null) {
       try (DbSession s = db.openSession(false)) {
         UserDto u = db.userDao().selectActiveUserByLogin(s, ok.login());
-        if (u == null) Log.throttledWarn(LOG, "jwt-auth: " + Log.clean(ok.subject()) + " (" + ok.source() + ") maps to unknown/inactive SonarQube user '" + ok.login() + "'");
+        if (u == null) Log.throttledWarn(LOG, "nouser:" + ok.login(), "jwt-auth: " + Log.clean(ok.subject()) + " (" + ok.source() + ") maps to unknown/inactive SonarQube user '" + ok.login() + "'");
         return u;
       }
     }
     UserDto ours = selectOurs(ok.login());
-    if (ours != null && !ours.isActive()) { Log.throttledWarn(LOG, "jwt-auth: user for '" + ok.login() + "' was deactivated by an administrator"); return null; }
+    if (ours != null && !ours.isActive()) { Log.throttledWarn(LOG, "deact:" + ok.login(), "jwt-auth: user for '" + ok.login() + "' was deactivated by an administrator"); return null; }
     long now = System.currentTimeMillis();
     if (ours != null && now - lastSync.getOrDefault(ok.login(), 0L) < RESYNC_MS) return ours;
 
@@ -114,7 +118,7 @@ public class JwtServiceAuthentication implements ServiceAuthentication {
         UserDto clash;
         try (DbSession s = db.openSession(false)) { clash = db.userDao().selectActiveUserByLogin(s, ok.login()); }
         if (clash != null) {
-          Log.throttledWarn(LOG, "jwt-auth: refusing to provision '" + ok.login() + "': a SonarQube user with that login already exists and is not managed by jwt-auth");
+          Log.throttledWarn(LOG, "clash:" + ok.login(), "jwt-auth: refusing to provision '" + ok.login() + "': a SonarQube user with that login already exists and is not managed by jwt-auth");
           return null;
         }
       }
@@ -129,7 +133,7 @@ public class JwtServiceAuthentication implements ServiceAuthentication {
       } catch (RuntimeException e) {
         UserDto again = selectOurs(ok.login()); // lost a race against another node/process: the user exists now
         if (again != null && again.isActive()) return again;
-        Log.throttledWarn(LOG, "jwt-auth: provisioning '" + ok.login() + "' failed: " + e);
+        Log.throttledWarn(LOG, "provfail:" + ok.login(), "jwt-auth: provisioning '" + ok.login() + "' failed: " + e);
         return ours != null && ours.isActive() ? ours : null;
       }
     }

@@ -22,6 +22,14 @@ cat > "$W/cfg/jwt-auth.json" <<JSON
  "rules":[{"subject":"system:serviceaccount:(?<ns>[a-z0-9-]+):(?<sa>[a-z0-9-]+)","login":"it_\${ns}_\${sa}","name":"it \${ns}/\${sa}",
            "autoProvision":true,"groups":["tekton-scanners"],"projectKeyPattern":"tekton-.*"}]}]}
 JSON
+python3 scripts/integration/jwt_tool.py jwks "$W" > "$W/cfg/file-jwks.json"
+python3 - "$W/cfg/jwt-auth.json" <<'PY'
+import json,sys
+p=sys.argv[1]; c=json.load(open(p))
+c["sources"].append({"name":"filesrc","issuer":"https://file.test.invalid","jwksFile":"/opt/sonarqube/jwt-auth/file-jwks.json","audiences":["sonarqube"],
+  "rules":[{"subject":"system:serviceaccount:(?<ns>[a-z0-9-]+):(?<sa>[a-z0-9-]+)","login":"file_${ns}_${sa}","autoProvision":True,"groups":["tekton-scanners"],"projectKeyPattern":"file-.*"}]})
+json.dump(c,open(p,"w"))
+PY
 chmod -R a+rX "$W/cfg"
 docker build -q --build-arg SONAR_IMAGE=$SONAR_IMAGE -t sjat-sonarqube:it -f docker/Dockerfile docker/.it >/dev/null || exit 2
 docker run -d --name $NAME --add-host=host.docker.internal:host-gateway -p $PORT:9000 \
@@ -46,6 +54,10 @@ check "token minting endpoint is not reachable"         "$(code -X POST -H "Auth
 for evil in '/api/ce/submit/../../api/users/search' '/api/ce/submit;x=1/../users/search' '/api/ce/%2e%2e/users/search' '/api//users/search'; do
   check "path trick $evil not served" "$([ "$(code --path-as-is -H "Authorization: Bearer $OK" "$S$evil")" != 200 ] && echo refused)" refused
 done
+FILE_TOK=$(python3 scripts/integration/jwt_tool.py mint "$W" https://file.test.invalid --sub system:serviceaccount:ci:filer)
+check "second source (static jwksFile, no network) works"  "$(code -X POST -H "Authorization: Bearer $FILE_TOK" $S/api/projects/create -d name=f -d project=file-a)" 200
+check "...and is scoped by its own projectKeyPattern"        "$(code -X POST -H "Authorization: Bearer $FILE_TOK" $S/api/projects/create -d name=f -d project=tekton-z)" 401
+check "...and its tokens do not work for the other source's scope" "$(code -X POST -H "Authorization: Bearer $OK" $S/api/projects/create -d name=f -d project=file-b)" 401
 check "ordinary SonarQube token still works"            "$(code -u "$(curl -s "${ADMIN[@]}" -X POST $S/api/user_tokens/generate -d name=t | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])'):" $S/api/users/current)" 200
 
 echo "concurrent first use of a NEW identity (8 parallel requests):"

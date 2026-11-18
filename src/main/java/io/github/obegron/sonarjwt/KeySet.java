@@ -16,6 +16,13 @@ import java.security.spec.ECPoint;
 import java.security.spec.ECPublicKeySpec;
 import java.security.spec.RSAPublicKeySpec;
 import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.security.KeyStore;
+import java.security.cert.Certificate;
+import java.security.cert.CertificateFactory;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.TrustManagerFactory;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -37,18 +44,25 @@ final class KeySet {
   private static final Duration MIN_RETRY = Duration.ofSeconds(10);
   private static final Duration MAX_STALE = Duration.ofHours(6);
   private static final long WAIT_SECONDS = 3;
-  /** One shared background thread: key fetches never run on (and never block) more than one request thread, and only briefly. */
-  private static final ExecutorService EXEC = Executors.newSingleThreadExecutor(r -> { Thread t = new Thread(r, "jwt-auth-keys"); t.setDaemon(true); return t; });
+  /** Small shared pool: a hung issuer ties up one worker for at most its timeouts, not the other sources. */
+  private static final ExecutorService EXEC = Executors.newFixedThreadPool(4, r -> { Thread t = new Thread(r, "jwt-auth-keys"); t.setDaemon(true); return t; });
   private static final int MAX_BODY = 1 << 20;
 
   /** Fetches a URL body; swappable in tests. */
-  interface Fetcher { String get(String url) throws Exception; }
+  /** @param authenticated send the source's bearer token (only ever to the discovery origin) */
+  interface Fetcher { String get(String url, boolean authenticated) throws Exception; }
 
-  static Fetcher httpFetcher() {
-    HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).followRedirects(HttpClient.Redirect.NEVER).build();
-    return url -> {
-      HttpResponse<InputStream> r = client.send(HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofSeconds(10)).GET().build(),
-          HttpResponse.BodyHandlers.ofInputStream());
+  static Fetcher httpFetcher(AuthConfig.Source src) {
+    HttpClient.Builder b = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).followRedirects(HttpClient.Redirect.NEVER);
+    if (src.caFile != null) {
+      try { b.sslContext(sslContextTrusting(Path.of(src.caFile))); }
+      catch (Exception e) { LOG.error("jwt-auth source '{}': cannot load caFile {}: {}", src.name, src.caFile, e.toString()); }
+    }
+    HttpClient client = b.build();
+    return (url, authenticated) -> {
+      HttpRequest.Builder rb = HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofSeconds(10)).GET();
+      if (authenticated && src.bearerTokenFile != null) rb.header("Authorization", "Bearer " + Files.readString(Path.of(src.bearerTokenFile)).trim());
+      HttpResponse<InputStream> r = client.send(rb.build(), HttpResponse.BodyHandlers.ofInputStream());
       try (InputStream in = r.body()) {
         if (r.statusCode() != 200) throw new IllegalStateException("HTTP " + r.statusCode() + " from " + url);
         byte[] body = in.readNBytes(MAX_BODY + 1); // never buffer more than the cap
@@ -56,6 +70,22 @@ final class KeySet {
         return new String(body, java.nio.charset.StandardCharsets.UTF_8);
       }
     };
+  }
+
+  /** An SSLContext that trusts exactly the certificates in the PEM file (the JVM default trust store is not consulted). */
+  static SSLContext sslContextTrusting(Path pem) throws Exception {
+    KeyStore ks = KeyStore.getInstance("PKCS12");
+    ks.load(null, null);
+    try (InputStream in = Files.newInputStream(pem)) {
+      int i = 0;
+      for (Certificate c : CertificateFactory.getInstance("X.509").generateCertificates(in)) ks.setCertificateEntry("ca" + i++, c);
+      if (i == 0) throw new IllegalArgumentException("no certificates in " + pem);
+    }
+    TrustManagerFactory tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+    tmf.init(ks);
+    SSLContext ctx = SSLContext.getInstance("TLS");
+    ctx.init(null, tmf.getTrustManagers(), null);
+    return ctx;
   }
 
   private final AuthConfig.Source source;
@@ -81,15 +111,19 @@ final class KeySet {
     return keys.get(kid);
   }
 
+  /**
+   * Only the thread that starts a fetch may wait for it (max 3 s), plus everyone while no key has ever been loaded.
+   * Other callers return immediately, so unauthenticated traffic cannot park more than one request thread per source.
+   */
   private void refreshAsync(boolean wait) {
-    Future<?> f;
+    Future<?> f; boolean leader = false;
     synchronized (this) {
       Instant now = clock.instant();
       if (inflight != null && !inflight.isDone()) f = inflight;
       else if (Duration.between(lastAttempt, now).compareTo(MIN_RETRY) < 0) return;
-      else { lastAttempt = now; f = inflight = EXEC.submit(this::doRefresh); }
+      else { lastAttempt = now; f = inflight = EXEC.submit(this::doRefresh); leader = true; }
     }
-    if (wait) {
+    if (wait && (leader || keys.isEmpty())) {
       try { f.get(WAIT_SECONDS, TimeUnit.SECONDS); }
       catch (InterruptedException e) { Thread.currentThread().interrupt(); }
       catch (Exception ignored) { /* logged by doRefresh; the caller just sees "no key" */ }
@@ -98,21 +132,39 @@ final class KeySet {
 
   private void doRefresh() {
     try {
-      String base = source.effectiveDiscoveryUrl();
-      JsonNode cfg = JSON.readTree(fetcher.get(base.replaceAll("/+$", "") + "/.well-known/openid-configuration"));
-      if (!source.issuer.equals(cfg.path("issuer").asText())) {
-        throw new IllegalStateException("discovery issuer '" + Log.clean(cfg.path("issuer").asText()) + "' != configured '" + source.issuer + "'");
+      Map<String, PublicKey> next;
+      if (source.jwksFile != null) {
+        next = parseJwks(Files.readString(Path.of(source.jwksFile)));
+      } else {
+        String base = source.effectiveDiscoveryUrl().replaceAll("/+$", "");
+        String jwksUri = source.jwksUri;
+        if (jwksUri == null) {
+          JsonNode cfg = JSON.readTree(fetcher.get(base + "/.well-known/openid-configuration", true));
+          if (!source.issuer.equals(cfg.path("issuer").asText())) {
+            throw new IllegalStateException("discovery issuer '" + Log.clean(cfg.path("issuer").asText()) + "' != configured '" + source.issuer + "'");
+          }
+          jwksUri = cfg.path("jwks_uri").asText("");
+          if (!source.allowForeignJwksHost && !sameHost(base, jwksUri))
+            throw new IllegalStateException("jwks_uri host differs from discoveryUrl host (set allowForeignJwksHost to permit): " + Log.clean(jwksUri));
+        }
+        if (!(jwksUri.startsWith("https://") || (jwksUri.startsWith("http://") && source.allowInsecureHttp)))
+          throw new IllegalStateException("jwks_uri not allowed (https required unless allowInsecureHttp): " + Log.clean(jwksUri));
+        next = parseJwks(fetcher.get(jwksUri, origin(base).equals(origin(jwksUri))));
       }
-      String jwksUri = cfg.path("jwks_uri").asText("");
-      if (!(jwksUri.startsWith("https://") || (jwksUri.startsWith("http://") && source.allowInsecureHttp)))
-        throw new IllegalStateException("jwks_uri not allowed (https required unless allowInsecureHttp): " + Log.clean(jwksUri));
-      Map<String, PublicKey> next = parseJwks(fetcher.get(jwksUri));
       keys = next;
       fetchedAt = clock.instant();
       LOG.info("jwt-auth source '{}': loaded {} signing key(s)", source.name, next.size());
     } catch (Exception e) {
       LOG.warn("jwt-auth source '{}': key refresh failed, keeping previous keys: {}", source.name, e.toString());
     }
+  }
+
+  private static String origin(String url) {
+    try { URI u = URI.create(url); return u.getScheme() + "://" + u.getHost() + ":" + (u.getPort() < 0 ? ("https".equals(u.getScheme()) ? 443 : 80) : u.getPort()); }
+    catch (Exception e) { return "?"; }
+  }
+  private static boolean sameHost(String a, String b) {
+    try { return URI.create(a).getHost().equalsIgnoreCase(URI.create(b).getHost()); } catch (Exception e) { return false; }
   }
 
   static Map<String, PublicKey> parseJwks(String json) throws Exception {

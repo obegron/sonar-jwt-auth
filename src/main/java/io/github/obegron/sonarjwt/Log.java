@@ -17,11 +17,15 @@ final class Log {
     return s.length() > 80 ? b.append("...").toString() : b.toString();
   }
 
-  /** Logs at WARN at most once a minute per message; the next logged line says how many were suppressed. */
-  static void throttledWarn(Logger log, String message) {
+  /**
+   * Logs at WARN at most once a minute per {@code key}; the next logged line says how many were suppressed.
+   * The key must be coarse (a call-site tag, optionally with a value that only authenticated callers control), never raw request data,
+   * so unauthenticated clients cannot flood the log by varying their input.
+   */
+  static void throttledWarn(Logger log, String key, String message) {
     if (SEEN.size() > 2000) SEEN.clear();
     long now = System.currentTimeMillis();
-    long[] st = SEEN.computeIfAbsent(message, k -> new long[] {0, 0});
+    long[] st = SEEN.computeIfAbsent(key, k -> new long[] {0, 0});
     synchronized (st) {
       if (now - st[0] < WINDOW_MS) { st[1]++; return; }
       long suppressed = st[1]; st[0] = now; st[1] = 0;

@@ -38,13 +38,21 @@ public final class JwtVerifier {
   private final List<KeySet> keySets;
   private final Clock clock;
 
-  public JwtVerifier(AuthConfig config, Clock clock) { this(config, KeySet.httpFetcher(), clock); }
+  /** @param previous the verifier being replaced: its cached keys are reused for unchanged sources, so a reload never loses keys */
+  public JwtVerifier(AuthConfig config, Clock clock, JwtVerifier previous) { this(config, null, clock, previous); }
 
-  JwtVerifier(AuthConfig config, KeySet.Fetcher fetcher, Clock clock) {
+  JwtVerifier(AuthConfig config, KeySet.Fetcher fetcher, Clock clock) { this(config, fetcher, clock, null); }
+
+  private JwtVerifier(AuthConfig config, KeySet.Fetcher fetcher, Clock clock, JwtVerifier previous) {
     this.sources = config.sources;
     this.clock = clock;
     List<KeySet> ks = new ArrayList<>();
-    for (AuthConfig.Source s : sources) ks.add(new KeySet(s, fetcher, clock));
+    for (AuthConfig.Source s : sources) {
+      KeySet reused = null;
+      if (previous != null) for (int i = 0; i < previous.sources.size(); i++)
+        if (previous.sources.get(i).keyIdentity().equals(s.keyIdentity())) { reused = previous.keySets.get(i); break; }
+      ks.add(reused != null ? reused : new KeySet(s, fetcher != null ? fetcher : KeySet.httpFetcher(s), clock));
+    }
     this.keySets = ks;
   }
 
@@ -108,7 +116,7 @@ public final class JwtVerifier {
       String ambiguity = ambiguousCapture(r.login, m, src.name);
       if (ambiguity != null) return new Rejected("subject '" + Log.clean(sub) + "': " + ambiguity);
       String login = resolve(r.login, m, src.name);
-      if (!LOGIN.matcher(login).matches()) return new Rejected("rule produced an invalid login '" + login + "' for sub " + sub);
+      if (!LOGIN.matcher(login).matches()) return new Rejected("rule produced an invalid login '" + Log.clean(login) + "' for sub " + Log.clean(sub));
       Provisioning prov = null;
       if (r.autoProvision) {
         String name = r.name == null ? sub : resolve(r.name, m, src.name);

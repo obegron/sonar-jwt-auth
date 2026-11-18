@@ -10,10 +10,11 @@ pod ──(projected SA token, aud=sonarqube)──▶ SonarQube ──▶ sonar
 ```
 
 - **Nothing stored in pipelines**; tokens expire in minutes.
+- **No extra components**: read keys straight from a Kubernetes API server, from a static key file, or from any https OIDC issuer.
 - **Several issuers at once** (e.g. a Jenkins cluster and a Tekton cluster), even when they share the default Kubernetes issuer string.
 - **Least privilege**: users are auto-provisioned into groups you choose; a JWT session can only call the scanner's endpoints and, with
   `projectKeyPattern`, only its own team's projects. Anything that is not a configured JWT (user tokens, UI login) is untouched.
-- **Fail-soft**: on an incompatible SonarQube it disables itself with an ERROR instead of breaking startup; unexpected errors never affect other credentials.
+- **Defensive**: if an internal API it needs is missing it disables itself with an ERROR instead of breaking startup (always test upgrades on staging); unexpected errors never affect other credentials.
 - Works alongside [sonarqube-community-branch-plugin](https://github.com/mc1arke/sonarqube-community-branch-plugin).
 
 ## Quick start

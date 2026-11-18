@@ -3,6 +3,7 @@
 
   jwt_tool.py gen   <dir>                         create <dir>/key.pem
   jwt_tool.py serve <dir> <port> <issuer>         serve /.well-known/openid-configuration and /jwks
+  jwt_tool.py jwks  <dir>                         print the public JWKS (for a "jwksFile" source)
   jwt_tool.py mint  <dir> <issuer> --sub S [--aud A] [--ttl SECONDS] [--age SECONDS_SINCE_ISSUED] [--kid K]
 """
 import argparse, base64, json, sys, time
@@ -38,6 +39,8 @@ def main():
                 data = json.dumps(body).encode(); self.send_response(200); self.send_header("Content-Type", "application/json"); self.end_headers(); self.wfile.write(data)
             def log_message(self, *x): pass
         HTTPServer(("0.0.0.0", port), H).serve_forever()
+    elif a.cmd == "jwks":
+        print(json.dumps(jwks(load(a.dir))))
     elif a.cmd == "mint":
         key, issuer = load(a.dir), a.arg[0]
         now = int(time.time()) - a.age
