@@ -1,0 +1,24 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>io.github.obegron</groupId><artifactId>sonar-jwt-auth</artifactId><version>0.1.0-SNAPSHOT</version>
+  <packaging>jar</packaging>
+  <name>sonar-jwt-auth</name>
+  <description>Authenticate SonarQube scanner requests with OIDC JWTs (e.g. Kubernetes ServiceAccount tokens)</description>
+  <properties>
+    <maven.compiler.release>21</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+  <dependencies>
+    <dependency><groupId>org.sonarsource.api.plugin</groupId><artifactId>sonar-plugin-api</artifactId><version>14.3.0.5639</version><scope>provided</scope></dependency>
+    <!-- Server classes (ServiceAuthentication, DbClient, jackson, slf4j): present at runtime on the system classpath. Never packaged. -->
+    <dependency><groupId>org.sonarsource.server</groupId><artifactId>sonar-application</artifactId><version>local</version><scope>system</scope><systemPath>${project.basedir}/.build/sonar-application.jar</systemPath></dependency>
+    <dependency><groupId>org.junit.jupiter</groupId><artifactId>junit-jupiter</artifactId><version>5.11.4</version><scope>test</scope></dependency>
+  </dependencies>
+  <build><plugins>
+    <plugin><artifactId>maven-surefire-plugin</artifactId><version>3.5.2</version></plugin>
+    <plugin>
+      <artifactId>maven-jar-plugin</artifactId><version>3.4.2</version>
+      <configuration><archive><manifestEntries><Premain-Class>io.github.obegron.sonarjwt.JwtAuthAgent</Premain-Class></manifestEntries></archive></configuration>
+    </plugin>
+  </plugins></build>
+</project>

@@ -1,0 +1,43 @@
+# Stand-in for a Tekton/Jenkins step: a pod whose ServiceAccount token (audience "sonarqube") is the only credential.
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: scanner, namespace: default}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: scan-src, namespace: default}
+data:
+  a.py: |
+    print("hello")
+---
+apiVersion: v1
+kind: Pod
+metadata: {name: scanner-e2e, namespace: default}
+spec:
+  serviceAccountName: scanner
+  restartPolicy: Never
+  containers:
+  - name: scan
+    image: sonarsource/sonar-scanner-cli
+    imagePullPolicy: IfNotPresent
+    workingDir: /work
+    command: ["sh","-c"]
+    args:
+    - |
+      cp /usr/src/* /work/ && export SONAR_TOKEN="$(cat /var/run/secrets/tokens/sonar)"
+      sonar-scanner -Dsonar.host.url=http://sonarqube.default.svc:9000 -Dsonar.projectKey="${PROJECT_KEY}" ${EXTRA}
+    env:
+    - {name: PROJECT_KEY, value: e2e-from-pod}
+    - {name: EXTRA, value: ""}
+    volumeMounts:
+    - {name: tokens, mountPath: /var/run/secrets/tokens, readOnly: true}
+    - {name: src, mountPath: /usr/src}
+    - {name: work, mountPath: /work}
+  volumes:
+  - name: tokens
+    projected:
+      sources:
+      - serviceAccountToken: {audience: sonarqube, expirationSeconds: 600, path: sonar}
+  - name: src
+    configMap: {name: scan-src}
+  - {name: work, emptyDir: {}}

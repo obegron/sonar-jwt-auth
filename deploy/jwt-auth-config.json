@@ -1,0 +1,14 @@
+{
+  "sources": [
+    {
+      "name": "tekton-test-cluster",
+      "issuer": "https://kubernetes.default.svc.cluster.local",
+      "discoveryUrl": "http://oidc-helper.default.svc:8080",
+      "allowInsecureHttp": true,
+      "audiences": ["sonarqube"],
+      "rules": [
+        { "subject": "system:serviceaccount:default:scanner", "login": "tekton-svc", "projectKeyPattern": "e2e.*" }
+      ]
+    }
+  ]
+}
