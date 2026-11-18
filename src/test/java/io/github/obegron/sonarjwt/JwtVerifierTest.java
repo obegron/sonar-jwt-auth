@@ -224,15 +224,18 @@ class JwtVerifierTest {
   @Test void projectKeyPatternCanUseCapturedValuesQuoted() throws Exception {
     Cluster c = new Cluster("http://t", "k1"); c.publish(web, ISS);
     String cfg = config("{\"name\":\"t\",\"issuer\":\"" + ISS + "\",\"discoveryUrl\":\"http://t\",\"allowInsecureHttp\":true,\"audiences\":[\"sonarqube\"],\"rules\":["
-        + "{\"subject\":\"system:serviceaccount:(?<ns>[^:]+):(?<sa>[^:]+)\",\"login\":\"ci_${ns}_${sa}\",\"autoProvision\":true,\"projectKeyPattern\":\"${ns}-.*\"}]}");
+        + "{\"subject\":\"system:serviceaccount:(?<ns>[^:]+):(?<sa>[^:]+)\",\"login\":\"ci_${ns}_${sa}\",\"autoProvision\":true,\"projectKeyPattern\":\"${ns}_.*\"}]}");
     JwtVerifier v = verifier(cfg);
     var a = assertInstanceOf(JwtVerifier.Accepted.class, v.verify(token(c, Map.of("sub", "system:serviceaccount:team-a:bot"))));
-    assertTrue(a.projectKeyPattern().matcher("team-a-service").matches());
-    assertFalse(a.projectKeyPattern().matcher("team-b-service").matches());
+    assertTrue(a.projectKeyPattern().matcher("team-a_service").matches());
+    assertFalse(a.projectKeyPattern().matcher("team-b_service").matches());
+    // the overlap a hyphen separator would cause: namespace "team" vs project of "team-dev"
+    var team = assertInstanceOf(JwtVerifier.Accepted.class, v.verify(token(c, Map.of("sub", "system:serviceaccount:team:bot"))));
+    assertFalse(team.projectKeyPattern().matcher("team-dev_x").matches());
     // a captured value containing regex syntax ('.') matches only itself; values the login check refuses (a '*') never get this far
     var dotted = assertInstanceOf(JwtVerifier.Accepted.class, v.verify(token(c, Map.of("sub", "system:serviceaccount:a.b:bot"))));
-    assertFalse(dotted.projectKeyPattern().matcher("axb-x").matches());
-    assertTrue(dotted.projectKeyPattern().matcher("a.b-x").matches());
+    assertFalse(dotted.projectKeyPattern().matcher("axb_x").matches());
+    assertTrue(dotted.projectKeyPattern().matcher("a.b_x").matches());
     assertInstanceOf(JwtVerifier.Rejected.class, v.verify(token(c, Map.of("sub", "system:serviceaccount:a.*:bot"))));
   }
 
@@ -243,7 +246,7 @@ class JwtVerifierTest {
     assertThrows(IllegalArgumentException.class, () -> AuthConfig.parse(config("{\"name\":\"a\"," + head + "\"rules\":[{" + sub + ",\"login\":\"ci_${ns}\",\"projectKeyPattern\":\"${team}-.*\"}]}")));
     // a source name containing the separator makes every token "ambiguous": refuse the config instead of failing at request time
     assertThrows(IllegalArgumentException.class, () -> AuthConfig.parse(config("{\"name\":\"tekton_prod\"," + head + "\"rules\":[{" + sub + ",\"login\":\"ci_${source}_${ns}\"}]}")));
-    assertDoesNotThrow(() -> AuthConfig.parse(config("{\"name\":\"tekton-prod\"," + head + "\"rules\":[{" + sub + ",\"login\":\"ci_${source}_${ns}\",\"projectKeyPattern\":\"${ns}-.*\"}]}")));
+    assertDoesNotThrow(() -> AuthConfig.parse(config("{\"name\":\"tekton-prod\"," + head + "\"rules\":[{" + sub + ",\"login\":\"ci_${source}_${ns}\",\"projectKeyPattern\":\"${ns}_.*\"}]}")));
   }
 
   @Test void anUnusableCaFileFailsClosedInsteadOfFallingBackToTheJvmTrustStore() throws Exception {
@@ -267,6 +270,32 @@ class JwtVerifierTest {
       assertInstanceOf(JwtVerifier.Rejected.class, new JwtVerifier(AuthConfig.parse(config(src)), clock, null).verify(token(c, Map.of())));
       assertTrue((System.nanoTime() - t0) / 1_000_000_000 < 5, "caller waited at most WAIT_SECONDS");
     } finally { KeySet.readDeadlineSeconds = old; srv.stop(0); }
+  }
+
+  @Test void riskyConfigIsAcceptedButWarnedAbout() throws Exception {
+    String head = "{\"name\":\"a\",\"issuer\":\"https://i\",\"audiences\":[\"x\"],";
+    String sub = "\"subject\":\"system:serviceaccount:(?<ns>[^:]+):(?<sa>[^:]+)\"";
+    AuthConfig noScope = AuthConfig.parse(config(head + "\"rules\":[{" + sub + ",\"login\":\"ci_${ns}\",\"autoProvision\":true}]}"));
+    assertTrue(noScope.warnings.stream().anyMatch(w -> w.contains("no projectKeyPattern")), noScope.warnings.toString());
+    AuthConfig hyphen = AuthConfig.parse(config(head + "\"rules\":[{" + sub + ",\"login\":\"ci_${ns}\",\"autoProvision\":true,\"projectKeyPattern\":\"${ns}-.*\"}]}"));
+    assertTrue(hyphen.warnings.stream().anyMatch(w -> w.contains("team-dev")), hyphen.warnings.toString());
+    AuthConfig good = AuthConfig.parse(config(head + "\"rules\":[{" + sub + ",\"login\":\"ci_${ns}\",\"autoProvision\":true,\"projectKeyPattern\":\"${ns}_.*\"}]}"));
+    assertEquals(List.of(), good.warnings);
+  }
+
+  @Test void aRefreshReturningNoKeysKeepsTheWorkingOnes() throws Exception {
+    Cluster c = new Cluster("http://t", "k1"); c.publish(web, ISS);
+    JwtVerifier v = verifier(config(source("t", "http://t", ".*", "uu")));
+    assertInstanceOf(JwtVerifier.Accepted.class, v.verify(token(c, Map.of())));
+    web.put("http://t/jwks", "{\"keys\":[]}");                    // issuer now publishes nothing usable
+    clock.advance(Duration.ofMinutes(11));                           // past the cache TTL: refresh happens
+    assertInstanceOf(JwtVerifier.Accepted.class, v.verify(token(c, Map.of())));
+    assertInstanceOf(JwtVerifier.Accepted.class, v.verify(token(c, Map.of())));
+  }
+
+  @Test void logCategoriesGroupSimilarProblemsButNotDifferentOnes() {
+    assertEquals(Log.category("subject 'a' matches no rule of source x"), Log.category("subject 'b' matches no rule of source x"));
+    assertNotEquals(Log.category("token expired"), Log.category("audience not accepted by source x"));
   }
 
   @Test void rejectsSubjectWithoutRule() throws Exception {

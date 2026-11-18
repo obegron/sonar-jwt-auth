@@ -65,7 +65,7 @@ public class JwtServiceAuthentication implements ServiceAuthentication {
 
     JwtVerifier.Result result = verifier.verify(token);
     if (result instanceof JwtVerifier.Rejected r) {
-      Log.throttledWarn(LOG, "rejected", "jwt-auth: rejected token for " + Log.clean(req.getMethod()) + " " + Log.clean(req.getRequestURI()) + ": " + r.reason());
+      Log.throttledWarn(LOG, "rejected:" + Log.category(r.reason()), "jwt-auth: rejected token for " + Log.clean(req.getMethod()) + " " + Log.clean(req.getRequestURI()) + ": " + r.reason());
       return Optional.empty();
     }
     if (!(result instanceof JwtVerifier.Accepted ok)) return Optional.empty();

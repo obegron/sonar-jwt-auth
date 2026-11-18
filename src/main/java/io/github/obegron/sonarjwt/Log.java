@@ -17,6 +17,12 @@ final class Log {
     return s.length() > 80 ? b.append("...").toString() : b.toString();
   }
 
+  /** A bounded category for a message: quoted values and digits removed, so different clients with the same problem share a key but different problems do not. */
+  static String category(String reason) {
+    String c = reason.replaceAll("'[^']*'", "").replaceAll("[0-9]+", "N");
+    return c.length() > 60 ? c.substring(0, 60) : c;
+  }
+
   /**
    * Logs at WARN at most once a minute per {@code key}; the next logged line says how many were suppressed.
    * The key must be coarse (a call-site tag, optionally with a value that only authenticated callers control), never raw request data,

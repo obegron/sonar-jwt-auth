@@ -49,6 +49,7 @@ final class ConfigHolder {
       JwtVerifier v = new JwtVerifier(cfg, clock, verifier);
       v.warmUp();
       verifier = v;
+      cfg.warnings.forEach(w -> LOG.warn("jwt-auth: config warning: {}", w));
       lastModified = m;
       LOG.info("jwt-auth: loaded {} source(s) from {}: {}", cfg.sources.size(), file, cfg.sources.stream().map(s -> s.name + "(" + s.issuer + ")").toList());
     } catch (Exception e) {

@@ -4,10 +4,13 @@
 The extension uses SonarQube internals, so it only supports specific Community Build versions (**26.x, 26.10 primary**) ([matrix](OPERATIONS.md#compatibility)).
 On a version where an internal API it uses is missing it **switches itself off with an ERROR in the log**. That check covers the classes and methods it calls, not every possible behaviour change, so always try an upgrade on a staging instance first (`scripts/integration/run.sh`).
 
-## 2. Get the jar
-Download `sonar-jwt-auth-<version>.jar` from the GitHub release, or build it: `scripts/build.sh` (needs docker, Java 21, Maven).
-Each release also publishes `ghcr.io/obegron/sonar-jwt-auth-init:<version>`, a tiny image that only carries the jar (for init containers). GHCR packages are private
-until you make them public (package settings) — otherwise give the pod an `imagePullSecret`, or build the image yourself from `docker/Dockerfile.init`.
+## 2. Build the jar (and the init image, for Kubernetes)
+```bash
+scripts/build.sh                                   # needs docker, Java 21, Maven; fetches the compile-time server jar, runs the tests -> target/sonar-jwt-auth-<version>.jar
+cp target/sonar-jwt-auth-*.jar docker/sonar-jwt-auth.jar
+docker build -t <your-registry>/sonar-jwt-auth-init:<version> -f docker/Dockerfile.init docker && docker push <your-registry>/sonar-jwt-auth-init:<version>   # Kubernetes / Helm only
+```
+Once the maintainer publishes a release, the jar is also attached to the GitHub release and `ghcr.io/obegron/sonar-jwt-auth-init:<version>` exists (a private package until made public, or use an `imagePullSecret`).
 
 ## 3. Tell SonarQube where the issuer's public keys are
 Pick one `source` style per issuer. Nothing to install on the issuer side in any of them.
@@ -54,7 +57,7 @@ For a private CA set `"caFile"` to a PEM file (the JVM trust store is then not u
       "name": "Tekton ${ns}/${sa}",
       "autoProvision": true,
       "groups": ["ci-scanners"],
-      "projectKeyPattern": "${ns}-.*" } ] },
+      "projectKeyPattern": "${ns}_.*" } ] },
   { "name": "jenkins", "issuer": "https://kubernetes.default.svc.cluster.local", "discoveryUrl": "https://oidc.jenkins.example.org",
     "audiences": ["sonarqube"],
     "rules": [ { "subject": "system:serviceaccount:jenkins:agent", "login": "jenkins_agent", "autoProvision": true, "groups": ["ci-scanners"], "projectKeyPattern": "jenkins-.*" } ] }
@@ -80,7 +83,7 @@ For a private CA set `"caFile"` to a PEM file (the JVM trust store is then not u
 | `login` | identity template; must start with literal text; `${source}` is the source name. Values captured from the token may not contain the literal separators between placeholders (so `a-b`+`c` can never equal `a`+`b-c`) — use `_` as separator for Kubernetes names |
 | `autoProvision` | create the user on first use (external user, provider `jwt-auth`). Otherwise `login` must name an existing user. A user of another origin with the same login is **never** adopted |
 | `name`, `groups` | display name / groups of provisioned users (groups must exist; `sonar-administrators` is refused). **Groups are re-synced every 5 minutes and replace the user's group memberships**, so manual additions are lost and a rule change takes up to 5 minutes to apply. Every user is also in SonarQube's default group (`sonar-users`) and gets the permissions granted to *Anyone* |
-| `projectKeyPattern` | regex; every project the request touches must match, and requests that cannot be tied to a project are refused. May use the rule's placeholders: `"${ns}-.*"` gives **each namespace its own project-key prefix with one rule** (the captured value is regex-quoted). A fixed pattern such as `tekton-.*` is shared by every identity the rule matches: use one rule per team, or `${ns}`, when teams must not touch each other's projects |
+| `projectKeyPattern` | regex; every project the request touches must match, and requests that cannot be tied to a project are refused. May use the rule's placeholders: `"${ns}_.*"` gives **each namespace its own project-key prefix with one rule** (the captured value is regex-quoted). **Use `_` (or `:`) after the placeholder, never `-`**: Kubernetes names contain `-`, so `${ns}-.*` would let namespace `team` touch the projects of `team-dev` (config load warns about it). A rule with `autoProvision` and no `projectKeyPattern` lets every matching identity overwrite any project (config load warns). A fixed pattern such as `tekton-.*` is shared by every identity the rule matches: use one rule per team, or `${ns}`, when teams must not touch each other's projects |
 
 The file is re-read within ~10 s of a change (mount the ConfigMap as a **directory**, not `subPath`). An invalid file is logged and the previous config stays active.
 
@@ -97,8 +100,7 @@ docker run -d -p 9000:9000 -v $PWD/jwt-auth:/opt/sonarqube/jwt-auth:ro sonarqube
 ### b) Official Helm chart
 `kubectl create configmap sonar-jwt-auth-config --from-file=jwt-auth.json` then
 `helm upgrade --install sonarqube sonarqube/sonarqube -f deploy/helm/values-sonar-jwt-auth.yaml` — see the comments in that file.
-The values reference the init image `ghcr.io/obegron/sonar-jwt-auth-init:<version>`, which exists only after a release has been published (and, being a private
-package by default, needs to be made public or pulled with an `imagePullSecret`); until then build and push your own: `docker build -f docker/Dockerfile.init -t <your-registry>/sonar-jwt-auth-init:<version> docker`.
+The values reference your init image (`your-registry.example.org/sonar-jwt-auth-init:<version>`, built in step 2): replace it before installing.
 **Database:** recent chart versions no longer bundle PostgreSQL — without `jdbcOverwrite` SonarQube uses its embedded H2, which is for evaluation only. For production configure an external database as usual.
 This install path is run for real, with the official chart, by the `k8s-e2e` CI job.
 ### c) Together with sonarqube-community-branch-plugin

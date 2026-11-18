@@ -30,7 +30,7 @@ k3d image import sonar-jwt-auth-init:e2e sonarsource/sonar-scanner-cli -c $CLUST
 helm repo add sonarqube https://SonarSource.github.io/helm-chart-sonarqube >/dev/null 2>&1; helm repo update >/dev/null 2>&1
 kubectl create namespace $NS >/dev/null
 kubectl -n $NS create configmap sonar-jwt-auth-config --from-file=jwt-auth.json=deploy/jwt-auth-config.k8s-e2e.json >/dev/null
-sed 's#ghcr.io/obegron/sonar-jwt-auth-init:[0-9.]*#sonar-jwt-auth-init:e2e#' deploy/helm/values-sonar-jwt-auth.yaml > "$W/values.yaml"
+sed 's#your-registry.example.org/sonar-jwt-auth-init:[0-9.A-Za-z-]*#sonar-jwt-auth-init:e2e#' deploy/helm/values-sonar-jwt-auth.yaml > "$W/values.yaml"
 echo "runner disk before install:"; df -h / | tail -1
 echo "helm install (official chart, embedded H2: test only)..."
 helm install sonarqube sonarqube/sonarqube -n $NS -f "$W/values.yaml" --set monitoringPasscode=e2e-passcode \
@@ -59,11 +59,11 @@ scan(){ kubectl delete pod scanner-e2e --ignore-not-found --wait >/dev/null
   kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/scanner-e2e --timeout=240s >/dev/null 2>&1
   kubectl logs scanner-e2e 2>&1 | grep -c 'EXECUTION SUCCESS'; }
 echo "scanner pod (namespace default, only credential: projected ServiceAccount token):"
-check "scan of project default-app (own namespace prefix) succeeds" "$(scan default-app)" 1
-check "scan of project other-app (another team's prefix) is refused" "$(scan other-app)" 0
+check "scan of project default_app (own namespace prefix) succeeds" "$(scan default_app)" 1
+check "scan of project other_app (another team's prefix) is refused" "$(scan other_app)" 0
 sleep 5
-check "analysis was accepted and finished" "$(curl -s "${ADMIN[@]}" "$S/api/ce/activity?component=default-app&ps=1" | python3 -c 'import sys,json;t=json.load(sys.stdin)["tasks"];print(t[0]["status"] if t else "none")')" SUCCESS
+check "analysis was accepted and finished" "$(curl -s "${ADMIN[@]}" "$S/api/ce/activity?component=default_app&ps=1" | python3 -c 'import sys,json;t=json.load(sys.stdin)["tasks"];print(t[0]["status"] if t else "none")')" SUCCESS
 check "user was auto-provisioned as external user" "$(curl -s "${ADMIN[@]}" "$S/api/users/search?q=k8s&ps=20" | python3 -c 'import sys,json;print(sorted({u.get("externalProvider") for u in json.load(sys.stdin)["users"]}))' )" "['jwt-auth']"
-check "project of the other prefix was never created" "$(curl -s "${ADMIN[@]}" "$S/api/projects/search?projects=other-app" | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["components"]))')" 0
+check "project of the other prefix was never created" "$(curl -s "${ADMIN[@]}" "$S/api/projects/search?projects=other_app" | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["components"]))')" 0
 
 echo; echo "passed: $pass  failed: $fail"; [ $fail -eq 0 ]

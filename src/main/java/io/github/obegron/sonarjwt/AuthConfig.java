@@ -32,6 +32,9 @@ public final class AuthConfig {
 
   public List<Source> sources = List.of();
 
+  /** Non-fatal findings from {@link #validate()}; logged when the config is loaded. */
+  public transient List<String> warnings = new ArrayList<>();
+
   @JsonIgnoreProperties(ignoreUnknown = false)
   public static final class Source {
     public String name;
@@ -148,6 +151,10 @@ public final class AuthConfig {
             for (String ph : JwtVerifier.placeholderNames(tpl)) if (!known.contains(ph))
               problems.add(n + ": unknown placeholder ${" + ph + "} in '" + tpl + "' (available: " + known + ")");
           }
+          if (r.autoProvision && r.projectKeyPattern == null)
+            warnings.add(n + ": rule '" + r.subject + "' has autoProvision but no projectKeyPattern: every matching identity can create and overwrite ANY project (Execute Analysis and Create Projects are global permissions)");
+          if (r.projectKeyPattern != null && r.projectKeyPattern.matches(".*\\$\\{\\w+}-.*"))
+            warnings.add(n + ": projectKeyPattern '" + r.projectKeyPattern + "' puts '-' right after a placeholder: Kubernetes names contain '-', so namespace 'team' would also match the projects of 'team-dev'. Use a separator that cannot occur in the value, e.g. '${ns}_.*'");
           if (r.projectKeyPattern != null) {
             if (r.projectKeyPattern.contains("${")) Pattern.compile(r.projectKeyPattern.replaceAll("\\$\\{\\w+}", "x")); // syntax check only
             else r.projectPattern = Pattern.compile(r.projectKeyPattern);

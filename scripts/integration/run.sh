@@ -28,7 +28,9 @@ import json,sys
 p=sys.argv[1]; c=json.load(open(p))
 # many namespaces, one rule: every appN namespace gets its own user and its own project-key prefix
 c["sources"][0]["rules"].insert(0,{"subject":"system:serviceaccount:(?<ns>app[0-9]+):pipeline","login":"ns_${ns}","name":"Tekton ${ns}","autoProvision":True,
-  "groups":["tekton-scanners"],"projectKeyPattern":"${ns}-.*"})
+  "groups":["tekton-scanners"],"projectKeyPattern":"${ns}_.*"})
+c["sources"][0]["rules"].insert(1,{"subject":"system:serviceaccount:(?<ns>team|team-dev):pipeline","login":"ns_${ns}","name":"Team ${ns}","autoProvision":True,
+  "groups":["tekton-scanners"],"projectKeyPattern":"${ns}_.*"})
 c["sources"].append({"name":"filesrc","issuer":"https://file.test.invalid","jwksFile":"/opt/sonarqube/jwt-auth/file-jwks.json","audiences":["sonarqube"],
   "rules":[{"subject":"system:serviceaccount:(?<ns>[a-z0-9-]+):(?<sa>[a-z0-9-]+)","login":"file_${ns}_${sa}","autoProvision":True,"groups":["tekton-scanners"],"projectKeyPattern":"file-.*"}]})
 json.dump(c,open(p,"w"))
@@ -64,13 +66,17 @@ check "...and its tokens do not work for the other source's scope" "$(code -X PO
 echo "many namespaces, one rule (app1/app2/app3):"
 for n in app1 app2 app3; do
   T=$(mint --sub system:serviceaccount:$n:pipeline)
-  check "$n can create its own project ($n-web)" "$(code -X POST -H "Authorization: Bearer $T" $S/api/projects/create -d name=w -d project=$n-web)" 200
+  check "$n can create its own project (${n}_web)" "$(code -X POST -H "Authorization: Bearer $T" $S/api/projects/create -d name=w -d project=${n}_web)" 200
 done
 T1=$(mint --sub system:serviceaccount:app1:pipeline)
-check "app1 cannot touch app2's projects"        "$(code -X POST -H "Authorization: Bearer $T1" $S/api/projects/create -d name=w -d project=app2-api)" 401
+check "app1 cannot touch app2's projects"        "$(code -X POST -H "Authorization: Bearer $T1" $S/api/projects/create -d name=w -d project=app2_api)" 401
 check "app1 cannot touch an unprefixed project"  "$(code -X POST -H "Authorization: Bearer $T1" $S/api/projects/create -d name=w -d project=web)" 401
-check "a namespace outside the rule (app1x) is refused" "$(code -X POST -H "Authorization: Bearer $(mint --sub system:serviceaccount:app1x:pipeline)" $S/api/projects/create -d name=w -d project=app1x-web)" 401
-check "a different ServiceAccount in app1 is refused"   "$(code -X POST -H "Authorization: Bearer $(mint --sub system:serviceaccount:app1:other)" $S/api/projects/create -d name=w -d project=app1-x)" 401
+check "a namespace outside the rule (app1x) is refused" "$(code -X POST -H "Authorization: Bearer $(mint --sub system:serviceaccount:app1x:pipeline)" $S/api/projects/create -d name=w -d project=app1x_web)" 401
+check "a different ServiceAccount in app1 is refused"   "$(code -X POST -H "Authorization: Bearer $(mint --sub system:serviceaccount:app1:other)" $S/api/projects/create -d name=w -d project=app1_x)" 401
+TA=$(mint --sub system:serviceaccount:team:pipeline); TD=$(mint --sub system:serviceaccount:team-dev:pipeline)
+check "namespace 'team' can create team_a"                   "$(code -X POST -H "Authorization: Bearer $TA" $S/api/projects/create -d name=w -d project=team_a)" 200
+check "namespace 'team' cannot touch 'team-dev' projects"    "$(code -X POST -H "Authorization: Bearer $TA" $S/api/projects/create -d name=w -d project=team-dev_a)" 401
+check "namespace 'team-dev' can create team-dev_a"           "$(code -X POST -H "Authorization: Bearer $TD" $S/api/projects/create -d name=w -d project=team-dev_a)" 200
 check "three namespaces -> three distinct users" "$(curl -s "${ADMIN[@]}" "$S/api/users/search?q=Tekton+app&ps=20" | python3 -c 'import sys,json;print(len([u for u in json.load(sys.stdin)["users"] if u.get("externalProvider")=="jwt-auth"]))')" 3
 check "ordinary SonarQube token still works"            "$(code -u "$(curl -s "${ADMIN[@]}" -X POST $S/api/user_tokens/generate -d name=t | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])'):" $S/api/users/current)" 200
 

@@ -21,7 +21,12 @@ jobs:
       - run: pip install cryptography
       - run: scripts/fetch-server-jar.sh
       - name: Version
-        run: echo "VERSION=${{ github.event_name == 'push' && github.ref_name || inputs.version }}" | sed 's/=v/=/' >> "$GITHUB_ENV"
+        env:
+          RAW_VERSION: ${{ github.event_name == 'push' && github.ref_name || inputs.version }}
+        run: |
+          v="${RAW_VERSION#v}"
+          [[ "$v" =~ ^[0-9A-Za-z._-]+$ ]] || { echo "bad version"; exit 1; }
+          echo "VERSION=$v" >> "$GITHUB_ENV"
       - run: mvn -B versions:set -DnewVersion=$VERSION -DgenerateBackupPoms=false && mvn -B verify
       - run: scripts/integration/run.sh
       - run: cp target/sonar-jwt-auth-$VERSION.jar docker/sonar-jwt-auth.jar

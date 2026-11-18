@@ -15,7 +15,7 @@
           "name": "k8s ${ns}/${sa}",
           "autoProvision": true,
           "groups": ["tekton-scanners"],
-          "projectKeyPattern": "${ns}-.*"
+          "projectKeyPattern": "${ns}_.*"
         }
       ]
     }

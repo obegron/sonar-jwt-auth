@@ -166,6 +166,7 @@ final class KeySet {
           throw new IllegalStateException("jwks_uri not allowed (https required unless allowInsecureHttp): " + Log.clean(jwksUri));
         next = parseJwks(fetcher.get(jwksUri, origin(base).equals(origin(jwksUri))));
       }
+      if (next.isEmpty()) throw new IllegalStateException("the issuer returned no usable signing keys"); // never replace working keys with nothing
       keys = next;
       fetchedAt = clock.instant();
       LOG.info("jwt-auth source '{}': loaded {} signing key(s)", source.name, next.size());

@@ -1,4 +1,4 @@
-# NOTE: the init image below exists once a release is published (private ghcr package by default) — otherwise build and push your own from docker/Dockerfile.init.
+# NOTE: build and push the init image to YOUR registry first (docs/INSTALL.md step 2), then replace the image below. Pre-built images exist only once a release is published.
 # NOTE: without `jdbcOverwrite` the chart uses the embedded H2 (evaluation only); configure an external database for production.
 # Values for the official SonarQube chart (https://github.com/SonarSource/helm-chart-sonarqube) that install sonar-jwt-auth.
 #   kubectl create configmap sonar-jwt-auth-config --from-file=jwt-auth.json=my-config.json
@@ -17,7 +17,7 @@ serviceAccount:
 # 1. an init container copies the agent jar into a volume shared with the SonarQube container
 extraInitContainers:
   - name: install-sonar-jwt-auth
-    image: ghcr.io/obegron/sonar-jwt-auth-init:0.1.0
+    image: your-registry.example.org/sonar-jwt-auth-init:0.1.0
     imagePullPolicy: IfNotPresent
     command: ["cp", "/sonar-jwt-auth.jar", "/agent/sonar-jwt-auth.jar"]
     volumeMounts:
