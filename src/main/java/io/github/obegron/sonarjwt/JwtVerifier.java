@@ -15,12 +15,20 @@ import java.util.regex.Pattern;
 /** Validates a JWT against the configured sources and maps it to a SonarQube login. No server dependencies. */
 public final class JwtVerifier {
   private static final ObjectMapper JSON = new ObjectMapper();
+  private static final Pattern LOGIN = Pattern.compile("[A-Za-z0-9_.@-]{2,100}");
   private static final Pattern PLACEHOLDER = Pattern.compile("\\$\\{(\\w+)}");
 
   public sealed interface Result permits NotApplicable, Accepted, Rejected {}
   /** Not a JWT of any configured issuer: let SonarQube's normal authentication handle the credential. */
   public record NotApplicable() implements Result {}
-  public record Accepted(String source, String subject, String login, Pattern projectKeyPattern, List<String> allowedPathPrefixes) implements Result {}
+  public record Provisioning(String name, List<String> groups) {}
+  /** @param provisioning null unless the rule has autoProvision */
+  public record Accepted(String source, String subject, String login, Pattern projectKeyPattern, List<String> allowedPathPrefixes,
+                         Provisioning provisioning) implements Result {
+    public Accepted(String source, String subject, String login, Pattern projectKeyPattern, List<String> allowedPathPrefixes) {
+      this(source, subject, login, projectKeyPattern, allowedPathPrefixes, null);
+    }
+  }
   public record Rejected(String reason) implements Result {}
 
   private final List<AuthConfig.Source> sources;
@@ -86,19 +94,26 @@ public final class JwtVerifier {
     for (AuthConfig.Rule r : src.rules) {
       Matcher m = r.subjectPattern.matcher(sub);
       if (!m.matches()) continue;
-      String login = resolve(r.login, m);
-      if (login.isBlank()) return new Rejected("rule produced an empty login for sub " + sub);
-      return new Accepted(src.name, sub, login, r.projectPattern, src.effectiveAllowedPaths());
+      String login = resolve(r.login, m, src.name);
+      if (!LOGIN.matcher(login).matches()) return new Rejected("rule produced an invalid login '" + login + "' for sub " + sub);
+      Provisioning prov = null;
+      if (r.autoProvision) {
+        String name = r.name == null ? sub : resolve(r.name, m, src.name);
+        prov = new Provisioning(name.isBlank() ? sub : name, List.copyOf(r.groups));
+      }
+      return new Accepted(src.name, sub, login, r.projectPattern, src.effectiveAllowedPaths(), prov);
     }
     return new Rejected("subject '" + sub + "' matches no rule of source " + src.name);
   }
 
-  private static String resolve(String template, Matcher m) {
+  /** ${name} = regex named group; ${source} = the source's name (keeps identities of different clusters apart). */
+  private static String resolve(String template, Matcher m, String source) {
     Matcher p = PLACEHOLDER.matcher(template);
     StringBuilder sb = new StringBuilder();
     while (p.find()) {
       String v;
-      try { v = m.group(p.group(1)); } catch (IllegalArgumentException e) { v = null; }
+      if (p.group(1).equals("source")) v = source;
+      else try { v = m.group(p.group(1)); } catch (IllegalArgumentException e) { v = null; }
       p.appendReplacement(sb, Matcher.quoteReplacement(v == null ? "" : v));
     }
     p.appendTail(sb);

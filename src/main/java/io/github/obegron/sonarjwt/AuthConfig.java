@@ -62,6 +62,12 @@ public final class AuthConfig {
     public String login;
     /** Optional regex: project keys in the request must match entirely. */
     public String projectKeyPattern;
+    /** Create the user on first use (external user, provider "jwt-auth"). Existing users, including local ones, are never modified. */
+    public boolean autoProvision;
+    /** Display name template for provisioned users (${group} placeholders allowed); defaults to the token's sub. */
+    public String name;
+    /** SonarQube groups provisioned users are kept in (re-synced periodically). "sonar-administrators" is refused. */
+    public List<String> groups = List.of();
 
     transient Pattern subjectPattern;
     transient Pattern projectPattern;
@@ -96,6 +102,8 @@ public final class AuthConfig {
       }
       if (s.rules != null) for (Rule r : s.rules) {
         if (r.subject == null || r.login == null || r.login.isBlank()) { problems.add(n + ": rule needs subject and login"); continue; }
+        if (!r.autoProvision && (!r.groups.isEmpty() || r.name != null)) problems.add(n + ": groups/name require autoProvision=true");
+        for (String g : r.groups) if (g == null || g.isBlank() || g.equals("sonar-administrators")) problems.add(n + ": group not allowed: " + g);
         try {
           r.subjectPattern = Pattern.compile(r.subject);
           if (r.projectKeyPattern != null) r.projectPattern = Pattern.compile(r.projectKeyPattern);

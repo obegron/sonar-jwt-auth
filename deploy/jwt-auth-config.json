@@ -1,13 +1,37 @@
 {
   "sources": [
     {
-      "name": "tekton-test-cluster",
+      "name": "tekton",
       "issuer": "https://kubernetes.default.svc.cluster.local",
       "discoveryUrl": "http://oidc-helper.default.svc:8080",
       "allowInsecureHttp": true,
       "audiences": ["sonarqube"],
       "rules": [
-        { "subject": "system:serviceaccount:default:scanner", "login": "tekton-svc", "projectKeyPattern": "e2e.*" }
+        {
+          "subject": "system:serviceaccount:(?<ns>[a-z0-9-]+):(?<sa>[a-z0-9-]+)",
+          "login": "${source}-${ns}-${sa}",
+          "name": "${source}: ${ns}/${sa}",
+          "autoProvision": true,
+          "groups": ["tekton-scanners"],
+          "projectKeyPattern": "tekton-.*"
+        }
+      ]
+    },
+    {
+      "name": "jenkins",
+      "issuer": "https://kubernetes.default.svc.cluster.local",
+      "discoveryUrl": "http://host.k3d.internal:19092",
+      "allowInsecureHttp": true,
+      "audiences": ["sonarqube"],
+      "rules": [
+        {
+          "subject": "system:serviceaccount:(?<ns>[a-z0-9-]+):(?<sa>[a-z0-9-]+)",
+          "login": "${source}-${ns}-${sa}",
+          "name": "${source}: ${ns}/${sa}",
+          "autoProvision": true,
+          "groups": ["jenkins-scanners"],
+          "projectKeyPattern": "jenkins-.*"
+        }
       ]
     }
   ]

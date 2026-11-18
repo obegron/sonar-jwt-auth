@@ -30,13 +30,26 @@ Without the file the feature is off. See [`deploy/jwt-auth-config.json`](deploy/
 | `issuer` | expected `iss` |
 | `discoveryUrl` | base URL serving `/.well-known/openid-configuration` (default: the issuer) |
 | `audiences` | required; one must be in the token's `aud` |
-| `rules[]` | first match wins: `subject` (regex, whole `sub`; named groups usable as `${name}` in `login`), `login` (existing SonarQube user to act as), optional `projectKeyPattern` (regex) |
+| `rules[]` | first match wins (see below) |
 | `allowedPathPrefixes` | default = what sonar-scanner needs (`/api/ce/submit`, `/api/v2/analysis/`, `/batch/`, …); `["*"]` = all |
 | `allowInsecureHttp` | permit http discovery/JWKS (test clusters only) |
 
 **Multiple sources** (e.g. Jenkins and Tekton clusters) are independent entries. Kubernetes clusters share the default issuer
 `https://kubernetes.default.svc.cluster.local`, so entries with the same `issuer` are told apart by which cluster's keys verify the signature.
 Giving each cluster a distinct `--service-account-issuer` is still recommended.
+
+### Rules
+| Field | |
+|---|---|
+| `subject` | regex that must match the whole `sub` (e.g. `system:serviceaccount:(?<ns>[a-z0-9-]+):(?<sa>[a-z0-9-]+)`) |
+| `login` | template: `${ns}`-style regex named groups plus `${source}` (the source's name, keeps identical subjects of different clusters apart) |
+| `projectKeyPattern` | optional regex; every project key in a request must match entirely |
+| `autoProvision` | create the user on first use as an external user (provider `jwt-auth`); without it the user named by `login` must already exist |
+| `name` | display-name template for provisioned users |
+| `groups` | groups provisioned users are kept in (re-synced every 5 min). Must already exist; `sonar-administrators` is refused |
+
+Provisioned users: SonarQube generates the internal login itself (from the display name plus a numeric suffix, e.g. `tekton-default-scanner74333`) and keeps `login` as the external identity, which is what this plugin looks users up by.
+A user an administrator deactivates stays deactivated. An existing user of another origin (e.g. a local account) with the same login is used as-is and never modified.
 
 Permissions: the mapped user's groups decide what is allowed. Create a service user in a group that only has *Create Projects* and *Execute Analysis*.
 
@@ -62,6 +75,10 @@ The JVM options that load it (see `deploy/sonarqube.yaml`):
 
 `scripts/bootstrap-sonar.sh` and `deploy/` contain throwaway credentials for a local test cluster only.
 
+## Multi-tenant test
+`deploy/oidc-helper-b.yaml` + a second k3d cluster (`k3d cluster create sonar-oidc-b -p "19092:30902@server:0"`) stand in for a second CI cluster.
+Both clusters have the same issuer and a `default/scanner` ServiceAccount; they end up as separate users (`tekton-…`, `jenkins-…`) in separate groups,
+each limited to its own project-key prefix.
+
 ## Not done yet
-- Auto-provisioning of users (today the rule's `login` must already exist).
-- Metrics/audit beyond log lines; a second real cluster in the e2e test (multi-source is covered by unit tests).
+- Metrics/audit beyond log lines.

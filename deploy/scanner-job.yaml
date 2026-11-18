@@ -25,8 +25,9 @@ spec:
     args:
     - |
       cp /usr/src/* /work/ && export SONAR_TOKEN="$(cat /var/run/secrets/tokens/sonar)"
-      sonar-scanner -Dsonar.host.url=http://sonarqube.default.svc:9000 -Dsonar.projectKey="${PROJECT_KEY}" ${EXTRA}
+      sonar-scanner -Dsonar.host.url=${SONAR_URL} -Dsonar.projectKey="${PROJECT_KEY}" ${EXTRA}
     env:
+    - {name: SONAR_URL, value: "http://sonarqube.default.svc:9000"}
     - {name: PROJECT_KEY, value: e2e-from-pod}
     - {name: EXTRA, value: ""}
     volumeMounts:
