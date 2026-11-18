@@ -83,7 +83,7 @@ For a private CA set `"caFile"` to a PEM file (the JVM trust store is then not u
 | `audiences` | **required**; one must be in the token's `aud` |
 | `rules[]` | first match wins |
 | `jwksFile` / `jwksUri` / `caFile` / `bearerTokenFile` / `allowForeignJwksHost` | how the keys are obtained, see step 3 |
-| `allowQualityGateWait` | default false. Set true if your pipelines use `sonar.qualitygate.wait=true`: the scanner then polls `/api/ce/task` and `/api/qualitygates/project_status` by task/analysis id, which cannot be tied to a project key. Trade-off: a scoped identity could read the status of another project's task/analysis *if it knew its random id* |
+| `allowQualityGateWait` | default **true**: lets `sonar.qualitygate.wait=true` work. The scanner then polls `/api/ce/task` and `/api/qualitygates/project_status` by task/analysis id, which cannot be tied to a project key. Trade-off: a scoped identity could read the status of another project's task/analysis *if it knew its random id*; set `false` to forbid |
 | `allowedPathPrefixes` | what a JWT session may call; default is exactly what `sonar-scanner` needs. Exact paths, or a prefix ending in `/`. **Widening it weakens `projectKeyPattern`**: only the built-in endpoints are scoped precisely, other paths are only checked for `projectKey`/`project`/`component`/`key`. `["*"]` is refused when any rule has a `projectKeyPattern` |
 | `maxTokenLifetimeSeconds` | default 86400 (a safe upper bound, but revocation is by expiry only): **set it just above your tokens' lifetime**, e.g. 900 for `expirationSeconds: 600` as in the example. Tokens valid longer (exp − iat) are refused; 0 disables |
 | `clockSkewSeconds` | default 60 |
@@ -164,7 +164,7 @@ Jenkins: each Jenkins is its own `source` (its own issuer/keys), so you decide p
 ```
 `"projectKeyPattern": ".*"` states "any project" on purpose (no config warning; an *absent* pattern also means unscoped but logs a warning). Paths are still limited to what the scanner needs. Tekton sources keep their own `${ns}_.*` prefixes next to it.
 Use the OIDC token your Jenkins issues (e.g. the *OpenID Connect Provider* plugin's ID-token credential, audience `sonarqube`) as `SONAR_TOKEN`.
-`sonar.qualitygate.wait=true` needs `"allowQualityGateWait": true` on the source (see the table in step 4). Branch analysis needs `sonar.branch.name` and the branch plugin, as before.
+`sonar.qualitygate.wait=true` works by default (`allowQualityGateWait`, step 4). Branch analysis needs `sonar.branch.name` and the branch plugin, as before.
 
 ## 8. Verify
 Boot log should show, in order:

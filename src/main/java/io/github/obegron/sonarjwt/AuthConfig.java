@@ -62,11 +62,11 @@ public final class AuthConfig {
     public List<String> allowedPathPrefixes = List.of();
     public long clockSkewSeconds = 60;
     /**
-     * Allow sonar.qualitygate.wait: the scanner then polls /api/ce/task and /api/qualitygates/project_status by task/analysis id, which cannot be tied
-     * to a project key. Off by default: with it on, a scoped identity could read the status of another project's task/analysis, but only if it knows its
-     * (random, unguessable) id. Ignored when allowedPathPrefixes is set explicitly (list the two paths yourself then).
+     * Allow sonar.qualitygate.wait (default true): the scanner then polls /api/ce/task and /api/qualitygates/project_status by task/analysis id, which
+     * cannot be tied to a project key. The trade-off: a scoped identity could read the status of another project's task/analysis, but only if it knew its
+     * random, unguessable id. Set false to forbid. Ignored when allowedPathPrefixes is set explicitly (list the two paths yourself then).
      */
-    public boolean allowQualityGateWait;
+    public boolean allowQualityGateWait = true;
     /** Tokens valid for longer than this (exp - iat) are refused, so a leaked long-lived token is not accepted. 0 disables the check. */
     public long maxTokenLifetimeSeconds = 86400;
 

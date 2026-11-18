@@ -26,7 +26,6 @@ python3 scripts/integration/jwt_tool.py jwks "$W" > "$W/cfg/file-jwks.json"
 python3 - "$W/cfg/jwt-auth.json" <<'PY'
 import json,sys
 p=sys.argv[1]; c=json.load(open(p))
-c["sources"][0]["allowQualityGateWait"]=True   # pipelines use sonar.qualitygate.wait
 # many namespaces, one rule: every appN namespace gets its own user and its own project-key prefix
 c["sources"][0]["rules"].insert(0,{"subject":"system:serviceaccount:(?<ns>app[0-9]+):pipeline","login":"ns_${ns}","name":"Tekton ${ns}","autoProvision":True,
   "groups":["tekton-scanners"],"projectKeyPattern":"${ns}_.*"})
@@ -35,7 +34,7 @@ c["sources"][0]["rules"].insert(1,{"subject":"system:serviceaccount:(?<ns>team|t
 # a Jenkins-like source that is deliberately NOT project-prefixed: every project key is fine, paths are still limited to the scanner's
 c["sources"].append({"name":"jenkinsish","issuer":"https://jenkins.test.invalid","jwksFile":"/opt/sonarqube/jwt-auth/file-jwks.json","audiences":["sonarqube"],
   "rules":[{"subject":".*","login":"jenkins_ci","name":"Jenkins CI","autoProvision":True,"groups":["tekton-scanners"],"projectKeyPattern":".*"}]})
-c["sources"].append({"name":"filesrc","issuer":"https://file.test.invalid","jwksFile":"/opt/sonarqube/jwt-auth/file-jwks.json","audiences":["sonarqube"],
+c["sources"].append({"name":"filesrc","allowQualityGateWait":False,"issuer":"https://file.test.invalid","jwksFile":"/opt/sonarqube/jwt-auth/file-jwks.json","audiences":["sonarqube"],
   "rules":[{"subject":"system:serviceaccount:(?<ns>[a-z0-9-]+):(?<sa>[a-z0-9-]+)","login":"file_${ns}_${sa}","autoProvision":True,"groups":["tekton-scanners"],"projectKeyPattern":"file-.*"}]})
 json.dump(c,open(p,"w"))
 PY
@@ -85,8 +84,8 @@ OUT=$(scanrun -Dsonar.projectKey=tekton-scan2); check "second analysis of the ex
 [ "$(echo "$OUT" | grep -c 'EXECUTION SUCCESS')" = 1 ] || { echo "--- refused by the extension:"; refused; }
 OUT=$(scanrun -Dsonar.projectKey=tekton-scan2 -Dsonar.qualitygate.wait=true -Dsonar.qualitygate.timeout=120); check "analysis with sonar.qualitygate.wait=true succeeds" "$(echo "$OUT" | grep -c 'EXECUTION SUCCESS')" 1
 [ "$(echo "$OUT" | grep -c 'EXECUTION SUCCESS')" = 1 ] || { echo "--- refused by the extension:"; refused; echo "$OUT" | grep -E 'ERROR|WARN' | head -4 | cut -c1-200; }
-check "quality-gate polling is refused for a source that did not enable it" "$(code -H "Authorization: Bearer $FILE_TOK" "$S/api/ce/task?id=nope")" 401
-check "...and reaches SonarQube (404 task not found) where it is enabled"  "$(code -H "Authorization: Bearer $(mint --sub system:serviceaccount:ci:builder)" "$S/api/ce/task?id=nope")" 404
+check "quality-gate polling is refused for a source that switched it off" "$(code -H "Authorization: Bearer $FILE_TOK" "$S/api/ce/task?id=nope")" 401
+check "...and reaches SonarQube (404 task not found) by default"  "$(code -H "Authorization: Bearer $(mint --sub system:serviceaccount:ci:builder)" "$S/api/ce/task?id=nope")" 404
 echo "all calls refused so far (only the deliberate refusals above are expected):"; refused
 
 echo "many namespaces, one rule (app1/app2/app3):"

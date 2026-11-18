@@ -272,15 +272,14 @@ class JwtVerifierTest {
     } finally { KeySet.readDeadlineSeconds = old; srv.stop(0); }
   }
 
-  @Test void qualityGateWaitIsOffByDefaultAndAddsExactlyTwoPathsWhenEnabled() throws Exception {
+  @Test void qualityGateWaitIsOnByDefaultAndCanBeSwitchedOff() throws Exception {
     String head = "{\"name\":\"a\",\"issuer\":\"https://i\",\"audiences\":[\"x\"],";
     String rules = "\"rules\":[{\"subject\":\".*\",\"login\":\"fixed-user\"}]}";
-    var off = AuthConfig.parse(config(head + rules)).sources.get(0).effectiveAllowedPaths();
+    var on = AuthConfig.parse(config(head + rules)).sources.get(0).effectiveAllowedPaths();
+    assertTrue(on.contains("/api/ce/task") && on.contains("/api/qualitygates/project_status") && on.contains("/api/new_code_periods/show"));
+    var off = AuthConfig.parse(config(head + "\"allowQualityGateWait\":false," + rules)).sources.get(0).effectiveAllowedPaths();
     assertFalse(off.contains("/api/ce/task")); assertFalse(off.contains("/api/qualitygates/project_status"));
-    var on = AuthConfig.parse(config(head + "\"allowQualityGateWait\":true," + rules)).sources.get(0).effectiveAllowedPaths();
-    assertTrue(on.contains("/api/ce/task") && on.contains("/api/qualitygates/project_status"));
     assertEquals(off.size() + 2, on.size());
-    assertTrue(on.contains("/api/new_code_periods/show"));
   }
 
   @Test void riskyConfigIsAcceptedButWarnedAbout() throws Exception {
