@@ -34,6 +34,7 @@ This proves *where and how* an artifact was built (this repo, this workflow, thi
 - A scheduled CI run (`compat-latest`, weekly) tests the shipped jar against the newest Community Build tag so an incompatible upstream release shows up as a red run before you upgrade.
 
 ## Security model, and what it does not do
+- Provisioned users belong to the identity provider `jwt-auth`, which is deliberately not registered as a login provider: they cannot log in interactively (UI), only authenticate with a valid token.
 - **Revocation is by expiry only** (there is no per-token revocation). A leaked token works until it expires: use short-lived tokens (Kubernetes `expirationSeconds: 600`) and a matching `maxTokenLifetimeSeconds` (900).
 - A token is accepted only if: RS256/ES256 signature verifies with a key from the issuer's JWKS; `iss` matches a source; `aud` contains an accepted audience;
   `exp` valid and `exp − iat` ≤ `maxTokenLifetimeSeconds`; `sub` matches a rule. Anything claiming a configured issuer but failing is **rejected**, never downgraded.

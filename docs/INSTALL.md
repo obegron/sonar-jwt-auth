@@ -52,6 +52,19 @@ The file is re-read within ~10 seconds of a change (a removed key stops working 
 For a private CA set `"caFile"` to a PEM file (the JVM trust store is then not used for this source). `jwksUri` skips discovery.
 `allowInsecureHttp` permits plain http and exists for throw-away test clusters only.
 
+**Several issuers of different kinds side by side.** The `issuer` is configured per source and is compared exactly with the token's `iss` claim, so clusters with different issuers (default Kubernetes, GKE, EKS, a custom `--service-account-issuer`) are simply separate sources:
+```json
+{ "sources": [
+  { "name": "kube", "issuer": "https://kubernetes.default.svc.cluster.local", "discoveryUrl": "https://kubernetes.default.svc",
+    "jwksUri": "https://kubernetes.default.svc/openid/v1/jwks", "caFile": "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt",
+    "bearerTokenFile": "/var/run/secrets/kubernetes.io/serviceaccount/token", "audiences": ["sonarqube"], "rules": [ ... ] },
+  { "name": "gke", "issuer": "https://container.googleapis.com/v1/projects/my-proj/locations/europe-north1/clusters/prod",
+    "audiences": ["sonarqube"], "rules": [ ... ] }
+] }
+```
+Find a cluster's issuer with `kubectl get --raw /.well-known/openid-configuration` (field `issuer`) or by decoding a token's `iss`; the discovery document's `issuer` must equal what you configure, otherwise the key load fails (`discovery issuer … != configured …` in the log).
+The GKE/EKS style source needs no `discoveryUrl`: it defaults to the issuer, which those clouds serve publicly over https. (This example is validated against the config parser, but not run against a real GKE/EKS cluster.)
+
 ## 4. Write the config
 `jwt-auth.json` (a ConfigMap in Kubernetes). **Replace the example hostnames (`*.example.org`) with your own.** One entry per issuer/cluster; clusters may share the same `issuer` string.
 
