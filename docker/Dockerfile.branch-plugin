@@ -1,0 +1,8 @@
+# Same, plus sonarqube-community-branch-plugin (put its jar next to this file first; versions must match your SonarQube).
+ARG SONAR_IMAGE=sonarqube:26.10.0.133078-community
+FROM ${SONAR_IMAGE}
+ARG BRANCH_PLUGIN=sonarqube-community-branch-plugin-26.10.0.jar
+COPY --chown=sonarqube:sonarqube ${BRANCH_PLUGIN} /opt/sonarqube/extensions/plugins/
+COPY --chown=sonarqube:sonarqube sonar-jwt-auth.jar /opt/sonarqube/extensions/sonar-jwt-auth.jar
+ENV SONAR_WEB_JAVAADDITIONALOPTS="-javaagent:/opt/sonarqube/extensions/plugins/${BRANCH_PLUGIN}=web -javaagent:/opt/sonarqube/extensions/sonar-jwt-auth.jar=web" \
+    SONAR_CE_JAVAADDITIONALOPTS="-javaagent:/opt/sonarqube/extensions/plugins/${BRANCH_PLUGIN}=ce"

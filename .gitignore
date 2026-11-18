@@ -1,3 +1,4 @@
 target/
 .build/
 docker/*.jar
+docker/.it/

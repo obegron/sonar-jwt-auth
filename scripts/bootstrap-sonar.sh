@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Idempotent-ish bootstrap of a fresh SonarQube: admin pw, service user/group, analysis token -> stdout path
 set -euo pipefail
-S=${S:-http://localhost:9000}; PW='Admin-spike-123!'; SVC='Svc-spike-123!'
+S=${S:-http://localhost:9000}; PW=${PW:-Admin-spike-123!}; SVC=${SVC:-Svc-spike-123!}
 until curl -sf $S/api/system/status | grep -q '"UP"'; do sleep 5; done
 curl -s -u admin:admin -X POST $S/api/users/change_password -d login=admin -d previousPassword=admin -d password="$PW" >/dev/null || true
 A="-u admin:$PW"

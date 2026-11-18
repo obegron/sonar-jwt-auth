@@ -17,6 +17,13 @@
   <build><plugins>
     <plugin><artifactId>maven-surefire-plugin</artifactId><version>3.5.2</version></plugin>
     <plugin>
+      <artifactId>maven-enforcer-plugin</artifactId><version>3.5.0</version>
+      <executions><execution><id>server-jar</id><goals><goal>enforce</goal></goals><phase>validate</phase><configuration><rules>
+        <requireFilesExist><files><file>${project.basedir}/.build/sonar-application.jar</file></files>
+          <message>The SonarQube server jar is a compile-time dependency. Run scripts/fetch-server-jar.sh first (needs docker).</message></requireFilesExist>
+      </rules></configuration></execution></executions>
+    </plugin>
+    <plugin>
       <artifactId>maven-jar-plugin</artifactId><version>3.4.2</version>
       <configuration><archive><manifestEntries><Premain-Class>io.github.obegron.sonarjwt.JwtAuthAgent</Premain-Class></manifestEntries></archive></configuration>
     </plugin>

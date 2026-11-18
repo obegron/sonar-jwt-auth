@@ -8,12 +8,15 @@ import java.security.Signature;
 import java.time.Clock;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /** Validates a JWT against the configured sources and maps it to a SonarQube login. No server dependencies. */
 public final class JwtVerifier {
+  private static final int MAX_TOKEN_CHARS = 8192;
   private static final ObjectMapper JSON = new ObjectMapper();
   private static final Pattern LOGIN = Pattern.compile("[A-Za-z0-9_.@-]{2,100}");
   private static final Pattern PLACEHOLDER = Pattern.compile("\\$\\{(\\w+)}");
@@ -47,7 +50,11 @@ public final class JwtVerifier {
 
   public boolean isEmpty() { return sources.isEmpty(); }
 
+  /** Begin fetching every source's keys in the background so the first request does not wait for them. */
+  public void warmUp() { for (KeySet k : keySets) k.warmUp(); }
+
   public Result verify(String token) {
+    if (token.length() > MAX_TOKEN_CHARS) return new NotApplicable();
     String[] parts = token.split("\\.", -1);
     if (parts.length != 3) return new NotApplicable();
     JsonNode header, claims;
@@ -64,7 +71,7 @@ public final class JwtVerifier {
 
     // From here on the token claims to come from a trusted issuer: any failure is a rejection.
     String alg = header.path("alg").asText("");
-    if (!alg.equals("RS256") && !alg.equals("ES256")) return new Rejected("unsupported alg '" + alg + "'");
+    if (!alg.equals("RS256") && !alg.equals("ES256")) return new Rejected("unsupported alg '" + Log.clean(alg) + "'");
     String kid = header.path("kid").asText("");
     if (kid.isEmpty()) return new Rejected("missing kid");
 
@@ -72,7 +79,7 @@ public final class JwtVerifier {
     byte[] sig;
     try { sig = Base64.getUrlDecoder().decode(parts[2]); } catch (IllegalArgumentException e) { return new Rejected("bad signature encoding"); }
 
-    String lastFailure = "no key '" + kid + "' for issuer " + iss;
+    String lastFailure = "no key '" + Log.clean(kid) + "' for issuer " + Log.clean(iss);
     for (int idx : candidates) {
       AuthConfig.Source src = sources.get(idx);
       PublicKey key = keySets.get(idx).find(kid);
@@ -89,11 +96,17 @@ public final class JwtVerifier {
     if (now - skew >= c.get("exp").asLong()) return new Rejected("token expired");
     if (c.path("nbf").isNumber() && now + skew < c.get("nbf").asLong()) return new Rejected("token not yet valid");
     if (!audienceMatches(c.path("aud"), src.audiences)) return new Rejected("audience not accepted by source " + src.name);
+    if (src.maxTokenLifetimeSeconds > 0) {
+      if (!c.path("iat").isNumber()) return new Rejected("missing iat (required while maxTokenLifetimeSeconds is set)");
+      if (c.get("exp").asLong() - c.get("iat").asLong() > src.maxTokenLifetimeSeconds) return new Rejected("token lifetime exceeds " + src.maxTokenLifetimeSeconds + "s");
+    }
     String sub = c.path("sub").asText("");
     if (sub.isEmpty()) return new Rejected("missing sub");
     for (AuthConfig.Rule r : src.rules) {
       Matcher m = r.subjectPattern.matcher(sub);
       if (!m.matches()) continue;
+      String ambiguity = ambiguousCapture(r.login, m, src.name);
+      if (ambiguity != null) return new Rejected("subject '" + Log.clean(sub) + "': " + ambiguity);
       String login = resolve(r.login, m, src.name);
       if (!LOGIN.matcher(login).matches()) return new Rejected("rule produced an invalid login '" + login + "' for sub " + sub);
       Provisioning prov = null;
@@ -103,10 +116,30 @@ public final class JwtVerifier {
       }
       return new Accepted(src.name, sub, login, r.projectPattern, src.effectiveAllowedPaths(), prov);
     }
-    return new Rejected("subject '" + sub + "' matches no rule of source " + src.name);
+    return new Rejected("subject '" + Log.clean(sub) + "' matches no rule of source " + src.name);
   }
 
   /** ${name} = regex named group; ${source} = the source's name (keeps identities of different clusters apart). */
+  /**
+   * Guards against two different subjects yielding the same login: a captured value may not contain a literal that sits
+   * between two placeholders of the template (with "${ns}-${sa}", ns "a-b"/sa "c" would collide with ns "a"/sa "b-c").
+   */
+  static String ambiguousCapture(String template, Matcher m, String source) {
+    Set<Character> separators = new HashSet<>();
+    String[] literals = PLACEHOLDER.split(template, -1);
+    for (int i = 1; i < literals.length - 1; i++) for (char ch : literals[i].toCharArray()) separators.add(ch);
+    if (separators.isEmpty()) return null;
+    Matcher p = PLACEHOLDER.matcher(template);
+    while (p.find()) {
+      String v = p.group(1).equals("source") ? source : safeGroup(m, p.group(1));
+      if (v != null) for (char ch : v.toCharArray()) if (separators.contains(ch))
+        return "value of ${" + p.group(1) + "} contains '" + ch + "', which separates placeholders in the login template (ambiguous identity); use a separator that cannot occur in the value";
+    }
+    return null;
+  }
+
+  private static String safeGroup(Matcher m, String name) { try { return m.group(name); } catch (IllegalArgumentException e) { return null; } }
+
   private static String resolve(String template, Matcher m, String source) {
     Matcher p = PLACEHOLDER.matcher(template);
     StringBuilder sb = new StringBuilder();

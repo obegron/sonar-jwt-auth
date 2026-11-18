@@ -26,7 +26,8 @@ spec:
         - {name: SONAR_CE_JAVAADDITIONALOPTS, value: "-javaagent:/opt/sonarqube/extensions/plugins/sonarqube-community-branch-plugin-26.10.0.jar=ce"}
         volumeMounts:
         - {name: data, mountPath: /opt/sonarqube/data}
-        - {name: jwt-auth-config, mountPath: /opt/sonarqube/conf/jwt-auth.json, subPath: jwt-auth.json}
+        # a directory mount (NOT subPath): Kubernetes updates it when the ConfigMap changes, so config edits are hot-reloaded
+        - {name: jwt-auth-config, mountPath: /opt/sonarqube/jwt-auth, readOnly: true}
         readinessProbe:
           httpGet: {path: /api/system/status, port: 9000}
           initialDelaySeconds: 30

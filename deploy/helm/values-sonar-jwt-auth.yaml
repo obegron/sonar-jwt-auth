@@ -1,0 +1,31 @@
+# Values for the official SonarQube chart (https://github.com/SonarSource/helm-chart-sonarqube) that install sonar-jwt-auth.
+#   kubectl create configmap sonar-jwt-auth-config --from-file=jwt-auth.json=my-config.json
+#   helm upgrade --install sonarqube sonarqube/sonarqube -f values-sonar-jwt-auth.yaml --set monitoringPasscode=...
+community:
+  enabled: true
+  buildNumber: "26.10.0.133078"   # must be a version sonar-jwt-auth was tested with (docs/OPERATIONS.md)
+
+monitoringPasscode: change-me      # required by the chart
+
+# 1. an init container copies the agent jar into a volume shared with the SonarQube container
+extraInitContainers:
+  - name: install-sonar-jwt-auth
+    image: ghcr.io/obegron/sonar-jwt-auth-init:0.1.0
+    imagePullPolicy: IfNotPresent
+    command: ["cp", "/sonar-jwt-auth.jar", "/agent/sonar-jwt-auth.jar"]
+    volumeMounts:
+      - {name: jwt-auth-agent, mountPath: /agent}
+    securityContext: {runAsNonRoot: true, runAsUser: 1000, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: ["ALL"]}}
+
+extraVolumes:
+  - {name: jwt-auth-agent, emptyDir: {}}
+  - {name: jwt-auth-config, configMap: {name: sonar-jwt-auth-config}}   # a directory mount, so ConfigMap edits are hot-reloaded
+
+extraVolumeMounts:
+  - {name: jwt-auth-agent, mountPath: /opt/sonarqube/jwt-auth-agent, readOnly: true}
+  - {name: jwt-auth-config, mountPath: /opt/sonarqube/jwt-auth, readOnly: true}
+
+# 2. load it as a javaagent in the web process. If you already use another agent (e.g. sonarqube-community-branch-plugin),
+#    keep both in this one value, separated by a space.
+sonarProperties:
+  sonar.web.javaAdditionalOpts: "-javaagent:/opt/sonarqube/jwt-auth-agent/sonar-jwt-auth.jar=web"

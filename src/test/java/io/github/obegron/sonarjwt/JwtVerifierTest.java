@@ -123,9 +123,9 @@ class JwtVerifierTest {
 
   @Test void sourcePlaceholderKeepsSameSubjectOfDifferentClustersApart() throws Exception {
     Cluster a = new Cluster("http://a", "k1"), b = new Cluster("http://b", "k1"); a.publish(web, ISS); b.publish(web, ISS);
-    JwtVerifier v = verifier(config(source("jenkins", "http://a", ".*", "${source}-scanner"), source("tekton", "http://b", ".*", "${source}-scanner")));
-    assertEquals("jenkins-scanner", assertInstanceOf(JwtVerifier.Accepted.class, v.verify(token(a, Map.of()))).login());
-    assertEquals("tekton-scanner", assertInstanceOf(JwtVerifier.Accepted.class, v.verify(token(b, Map.of()))).login());
+    JwtVerifier v = verifier(config(source("jenkins", "http://a", ".*", "gw-${source}"), source("tekton", "http://b", ".*", "gw-${source}")));
+    assertEquals("gw-jenkins", assertInstanceOf(JwtVerifier.Accepted.class, v.verify(token(a, Map.of()))).login());
+    assertEquals("gw-tekton", assertInstanceOf(JwtVerifier.Accepted.class, v.verify(token(b, Map.of()))).login());
   }
 
   @Test void rejectsSubjectWithoutRule() throws Exception {
@@ -168,8 +168,8 @@ class JwtVerifierTest {
     assertInstanceOf(JwtVerifier.Accepted.class, v.verify(token(old, Map.of())));
     Cluster rotated = new Cluster("http://t", "k2"); rotated.publish(web, ISS);
     String t2 = token(rotated, Map.of());
-    assertInstanceOf(JwtVerifier.Rejected.class, v.verify(t2)); // within 30s retry window: no refetch yet
-    clock.advance(Duration.ofSeconds(31));
+    assertInstanceOf(JwtVerifier.Rejected.class, v.verify(t2)); // within the 10s retry window: no refetch yet
+    clock.advance(Duration.ofSeconds(11));
     assertInstanceOf(JwtVerifier.Accepted.class, v.verify(t2));
   }
 
@@ -177,9 +177,9 @@ class JwtVerifierTest {
     Cluster jenkins = new Cluster("http://jenkins", "k1"), tekton = new Cluster("http://tekton", "k1");
     jenkins.publish(web, ISS); tekton.publish(web, ISS);
     JwtVerifier v = verifier(config(
-        source("jenkins", "http://jenkins", "system:serviceaccount:ci:pipeline", "jenkins-scanner"),
+        source("jenkins", "http://jenkins", "system:serviceaccount:ci:pipeline", "gw-jenkins"),
         source("tekton", "http://tekton", "system:serviceaccount:ci:pipeline", "tekton-scanner")));
-    assertEquals("jenkins-scanner", assertInstanceOf(JwtVerifier.Accepted.class, v.verify(token(jenkins, Map.of()))).login());
+    assertEquals("gw-jenkins", assertInstanceOf(JwtVerifier.Accepted.class, v.verify(token(jenkins, Map.of()))).login());
     assertEquals("tekton-scanner", assertInstanceOf(JwtVerifier.Accepted.class, v.verify(token(tekton, Map.of()))).login());
   }
 
@@ -195,7 +195,7 @@ class JwtVerifierTest {
     web.put("http://e/.well-known/openid-configuration", JSON.writeValueAsString(Map.of("issuer", ISS, "jwks_uri", "http://e/jwks")));
     web.put("http://e/jwks", JSON.writeValueAsString(Map.of("keys", List.of(Map.of("kty", "EC", "crv", "P-256", "kid", "e1",
         "x", b64(pad32(pub.getW().getAffineX().toByteArray())), "y", b64(pad32(pub.getW().getAffineY().toByteArray())))))));
-    String signing = b64(JSON.writeValueAsBytes(Map.of("alg", "ES256", "kid", "e1"))) + "." + b64(JSON.writeValueAsBytes(Map.of("iss", ISS, "sub", "s", "aud", "sonarqube", "exp", clock.instant().plusSeconds(60).getEpochSecond())));
+    String signing = b64(JSON.writeValueAsBytes(Map.of("alg", "ES256", "kid", "e1"))) + "." + b64(JSON.writeValueAsBytes(Map.of("iss", ISS, "sub", "s", "aud", "sonarqube", "iat", clock.instant().getEpochSecond(), "exp", clock.instant().plusSeconds(60).getEpochSecond())));
     Signature s = Signature.getInstance("SHA256withECDSAinP1363Format"); s.initSign(kp.getPrivate()); s.update(signing.getBytes(StandardCharsets.US_ASCII));
     var r = verifier(config(source("e", "http://e", ".*", "uu"))).verify(signing + "." + b64(s.sign()));
     assertInstanceOf(JwtVerifier.Accepted.class, r);
@@ -213,20 +213,51 @@ class JwtVerifierTest {
     assertInstanceOf(JwtVerifier.Rejected.class, verifier(config(source("t", "http://t", ".*", "uu"))).verify(token(c, Map.of())));
   }
 
-  @Test void tokenExtractionAndPathRules() {
+  @Test void tokenExtraction() {
     assertEquals("a.b.c", JwtServiceAuthentication.extractToken("Bearer a.b.c"));
     assertEquals("a.b.c", JwtServiceAuthentication.extractToken("Basic " + Base64.getEncoder().encodeToString("a.b.c:".getBytes())));
     assertNull(JwtServiceAuthentication.extractToken(null));
-    var ok = new JwtVerifier.Accepted("s", "sub", "u", null, AuthConfig.DEFAULT_ALLOWED_PATHS);
-    assertTrue(JwtServiceAuthentication.pathAllowed("/api/ce/submit", ok));
-    assertTrue(JwtServiceAuthentication.pathAllowed("/api/settings/values.protobuf", ok));
-    assertTrue(JwtServiceAuthentication.pathAllowed("/api/v2/analysis/engine", ok));
-    assertTrue(JwtServiceAuthentication.pathAllowed("/batch/project.protobuf", ok));
-    assertTrue(JwtServiceAuthentication.pathAllowed("/api/project_branches/list", ok));
-    assertFalse(JwtServiceAuthentication.pathAllowed("/api/project_branches/delete", ok));
-    assertFalse(JwtServiceAuthentication.pathAllowed("/api/users/search", ok));
-    assertFalse(JwtServiceAuthentication.pathAllowed("/api/ce/submitx", ok));
-    assertFalse(JwtServiceAuthentication.pathAllowed("/api/user_tokens/generate", ok));
+  }
+
+  @Test void loginTemplatesCannotCollideAcrossSubjects() throws Exception {
+    Cluster c = new Cluster("http://t", "k1"); c.publish(web, ISS);
+    String sub = "system:serviceaccount:(?<ns>[^:]+):(?<sa>[^:]+)";
+    // '-' between placeholders: ns "a-b" could collide with sa "b-c" of ns "a" -> refused
+    JwtVerifier dash = verifier(config(source("t", "http://t", sub, "ci-${ns}-${sa}")));
+    assertInstanceOf(JwtVerifier.Rejected.class, dash.verify(token(c, Map.of("sub", "system:serviceaccount:team-a:builder"))));
+    assertInstanceOf(JwtVerifier.Accepted.class, dash.verify(token(c, Map.of("sub", "system:serviceaccount:team:builder"))));
+    // '_' cannot occur in Kubernetes names: dashes in values are fine
+    JwtVerifier under = verifier(config(source("t", "http://t", sub, "ci_${ns}_${sa}")));
+    assertEquals("ci_team-a_builder", assertInstanceOf(JwtVerifier.Accepted.class, under.verify(token(c, Map.of("sub", "system:serviceaccount:team-a:builder")))).login());
+  }
+
+  @Test void configRequiresLiteralLoginPrefixAndSaneAllowedPaths() {
+    String head = "{\"name\":\"a\",\"issuer\":\"https://i\",\"audiences\":[\"x\"],";
+    assertThrows(IllegalArgumentException.class, () -> AuthConfig.parse(config(head + "\"rules\":[{\"subject\":\".*\",\"login\":\"${sa}\"}]}")));
+    assertThrows(IllegalArgumentException.class, () -> AuthConfig.parse(config(head + "\"allowedPathPrefixes\":[\"/api/../x\"],\"rules\":[{\"subject\":\".*\",\"login\":\"fixed-user\"}]}")));
+  }
+
+  @Test void longLivedTokensAreRefusedByDefault() throws Exception {
+    Cluster c = new Cluster("http://t", "k1"); c.publish(web, ISS);
+    JwtVerifier v = verifier(config(source("t", "http://t", ".*", "uu")));
+    long now = clock.instant().getEpochSecond();
+    assertInstanceOf(JwtVerifier.Accepted.class, v.verify(token(c, Map.of("iat", now, "exp", now + 3600))));
+    assertInstanceOf(JwtVerifier.Rejected.class, v.verify(token(c, Map.of("iat", now, "exp", now + 10 * 86400))));
+    Map<String, Object> noIat = new HashMap<>(); noIat.put("iat", null);
+    assertInstanceOf(JwtVerifier.Rejected.class, v.verify(token(c, noIat)));
+  }
+
+  @Test void oversizedAndMalformedTokensAreIgnoredCheaply() throws Exception {
+    Cluster c = new Cluster("http://t", "k1"); c.publish(web, ISS);
+    JwtVerifier v = verifier(config(source("t", "http://t", ".*", "uu")));
+    assertInstanceOf(JwtVerifier.NotApplicable.class, v.verify("a".repeat(9000) + ".b.c"));
+    assertEquals("a?b", Log.clean("a\nb"));
+    assertTrue(Log.clean("x".repeat(500)).length() < 90);
+  }
+
+  @Test void compatGuardPassesOnTheRealServerClassesAndFailsSoftWithout() {
+    assertEquals(List.of(), Compat.problems(JwtVerifierTest.class.getClassLoader()));
+    assertFalse(Compat.problems(new java.net.URLClassLoader(new java.net.URL[0], null)).isEmpty());
   }
 
   static byte[] pad32(byte[] b) { byte[] u = unsigned(b); byte[] o = new byte[32]; System.arraycopy(u, 0, o, 32 - u.length, u.length); return o; }

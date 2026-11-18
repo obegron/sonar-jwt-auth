@@ -1,0 +1,5 @@
+# Tiny image that only carries the jar: use as an init container (Kubernetes/Helm) to drop it into a volume next to SonarQube.
+FROM busybox:1.37
+COPY sonar-jwt-auth.jar /sonar-jwt-auth.jar
+USER 1000
+CMD ["cp", "/sonar-jwt-auth.jar", "/target/sonar-jwt-auth.jar"]

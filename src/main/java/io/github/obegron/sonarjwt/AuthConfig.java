@@ -26,10 +26,9 @@ import java.util.regex.PatternSyntaxException;
 public final class AuthConfig {
   /** Paths a JWT-authenticated session may call unless a source overrides it: what sonar-scanner needs. */
   public static final List<String> DEFAULT_ALLOWED_PATHS = List.of(
-      "/api/ce/submit", "/api/ce/task", "/api/v2/analysis/", "/api/settings/values", "/api/plugins/installed",
-      "/api/plugins/download", "/api/server/version", "/api/qualityprofiles/search", "/api/languages/list",
-      "/api/features/list", "/api/metrics/search", "/api/analysis_cache/", "/api/qualitygates/project_status",
-      "/api/projects/create", "/api/project_branches/list", "/api/project_pull_requests/list", "/batch/");
+      "/api/ce/submit", "/api/v2/analysis/", "/api/settings/values", "/api/plugins/installed", "/api/plugins/download",
+      "/api/server/version", "/api/qualityprofiles/search", "/api/languages/list", "/api/features/list", "/api/metrics/search",
+      "/api/analysis_cache/get", "/api/projects/create", "/api/project_branches/list", "/api/project_pull_requests/list", "/batch/project");
 
   public List<Source> sources = List.of();
 
@@ -46,9 +45,11 @@ public final class AuthConfig {
     public List<String> audiences = List.of();
     /** First matching rule wins. */
     public List<Rule> rules = List.of();
-    /** Path prefixes this source may call; empty = {@link #DEFAULT_ALLOWED_PATHS}; ["*"] = everything. */
+    /** Paths this source may call: exact paths, or a prefix ending in '/'; empty = {@link #DEFAULT_ALLOWED_PATHS}; ["*"] = everything. */
     public List<String> allowedPathPrefixes = List.of();
     public long clockSkewSeconds = 60;
+    /** Tokens valid for longer than this (exp - iat) are refused, so a leaked long-lived token is not accepted. 0 disables the check. */
+    public long maxTokenLifetimeSeconds = 86400;
 
     String effectiveDiscoveryUrl() { return discoveryUrl == null || discoveryUrl.isBlank() ? issuer : discoveryUrl; }
     List<String> effectiveAllowedPaths() { return allowedPathPrefixes.isEmpty() ? DEFAULT_ALLOWED_PATHS : allowedPathPrefixes; }
@@ -58,7 +59,11 @@ public final class AuthConfig {
   public static final class Rule {
     /** Regex, must match the whole {@code sub}. Named groups can be used in {@link #login} as ${name}. */
     public String subject;
-    /** Existing SonarQube user to act as (the user's groups/permissions decide what is allowed). */
+    /**
+     * Template for the identity. Without autoProvision: an existing SonarQube user. With it: the provisioned user's external id.
+     * Must start with literal text (e.g. "tekton_${ns}_${sa}"); values captured from the token may not contain the literal separators
+     * between placeholders, so two different subjects can never produce the same login.
+     */
     public String login;
     /** Optional regex: project keys in the request must match entirely. */
     public String projectKeyPattern;
@@ -94,6 +99,9 @@ public final class AuthConfig {
       if (s.issuer == null || s.issuer.isBlank()) problems.add(n + ": issuer is required");
       if (s.audiences == null || s.audiences.isEmpty()) problems.add(n + ": at least one audience is required");
       if (s.rules == null || s.rules.isEmpty()) problems.add(n + ": at least one rule is required");
+      if (s.maxTokenLifetimeSeconds < 0) problems.add(n + ": maxTokenLifetimeSeconds must be >= 0");
+      if (s.allowedPathPrefixes != null) for (String ap : s.allowedPathPrefixes)
+        if (!ap.equals("*") && (!ap.startsWith("/") || ap.contains("..") || ap.contains("%") || ap.contains(";"))) problems.add(n + ": bad allowedPathPrefixes entry: " + ap);
       if (s.clockSkewSeconds < 0 || s.clockSkewSeconds > 600) problems.add(n + ": clockSkewSeconds must be 0..600");
       if (s.issuer != null) {
         String url = s.effectiveDiscoveryUrl();
@@ -102,8 +110,10 @@ public final class AuthConfig {
       }
       if (s.rules != null) for (Rule r : s.rules) {
         if (r.subject == null || r.login == null || r.login.isBlank()) { problems.add(n + ": rule needs subject and login"); continue; }
+        if (r.login.contains("${") && !r.login.matches("^[A-Za-z0-9_.@-]{2,}.*")) problems.add(n + ": login template must start with literal text: " + r.login);
         if (!r.autoProvision && (!r.groups.isEmpty() || r.name != null)) problems.add(n + ": groups/name require autoProvision=true");
         for (String g : r.groups) if (g == null || g.isBlank() || g.equals("sonar-administrators")) problems.add(n + ": group not allowed: " + g);
+        // NOTE: a group that holds the Administer permission is NOT detected here; keep provisioned groups to Create Projects / Execute Analysis.
         try {
           r.subjectPattern = Pattern.compile(r.subject);
           if (r.projectKeyPattern != null) r.projectPattern = Pattern.compile(r.projectKeyPattern);
