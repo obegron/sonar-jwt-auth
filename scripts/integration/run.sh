@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # End-to-end test against a real SonarQube container: JWT happy path, rejection cases, scope/path attacks, concurrent first use,
-# hot reload. Needs docker, python3 + `cryptography`, curl, and a built jar (mvn package). Usage: scripts/integration/run.sh
+# hot reload. DB=postgres runs SonarQube against an external PostgreSQL instead of the embedded H2. Needs docker, python3 + `cryptography`, curl, and a built jar (mvn package). Usage: scripts/integration/run.sh
 set -uo pipefail
 cd "$(dirname "$0")/../.."
 SONAR_IMAGE=${SONAR_IMAGE:-sonarqube:26.10.0.133078-community}
 PORT=${SONAR_PORT:-19000}; JWKS_PORT=${JWKS_PORT:-18765}; NAME=sjat-sonarqube
 ISS=https://issuer.test.invalid
-W=$(mktemp -d); trap 'docker rm -f $NAME >/dev/null 2>&1; kill $JWKS_PID 2>/dev/null; rm -rf "$W"' EXIT
+W=$(mktemp -d); trap 'docker rm -f $NAME sjat-pg >/dev/null 2>&1; docker network rm sjat-net >/dev/null 2>&1; kill $JWKS_PID 2>/dev/null; rm -rf "$W"' EXIT
 JAR=$(ls target/sonar-jwt-auth-*.jar | grep -v sources | head -1); [ -f "$JAR" ] || { echo "build first: mvn package"; exit 2; }
 S=http://localhost:$PORT; ADMIN=(-u 'admin:Admin-it-123!')
 pass=0; fail=0
@@ -37,7 +37,15 @@ json.dump(c,open(p,"w"))
 PY
 chmod -R a+rX "$W/cfg"
 docker build -q --build-arg SONAR_IMAGE=$SONAR_IMAGE -t sjat-sonarqube:it -f docker/Dockerfile docker/.it >/dev/null || exit 2
-docker run -d --name $NAME --add-host=host.docker.internal:host-gateway -p $PORT:9000 \
+DBARGS=()
+if [ "${DB:-h2}" = postgres ]; then
+  docker network create sjat-net >/dev/null 2>&1
+  docker run -d --name sjat-pg --network sjat-net --tmpfs /var/lib/postgresql/data -e POSTGRES_USER=sonar -e POSTGRES_PASSWORD=sonar -e POSTGRES_DB=sonar postgres:17-alpine >/dev/null || exit 2
+  for i in $(seq 1 30); do docker exec sjat-pg pg_isready -U sonar >/dev/null 2>&1 && break; sleep 2; done
+  DBARGS=(--network sjat-net -e SONAR_JDBC_URL=jdbc:postgresql://sjat-pg:5432/sonar -e SONAR_JDBC_USERNAME=sonar -e SONAR_JDBC_PASSWORD=sonar)
+  echo "database: external PostgreSQL"
+fi
+docker run -d --name $NAME "${DBARGS[@]}" --add-host=host.docker.internal:host-gateway -p $PORT:9000 \
   --tmpfs /opt/sonarqube/data:uid=1000,gid=1000,size=2g --tmpfs /opt/sonarqube/temp:uid=1000,gid=1000,size=1g -v "$W/cfg":/opt/sonarqube/jwt-auth:ro \
   -e SONAR_ES_BOOTSTRAP_CHECKS_DISABLE=true sjat-sonarqube:it >/dev/null
 echo "waiting for SonarQube..."; until curl -sf $S/api/system/status | grep -q '"UP"'; do sleep 5; done

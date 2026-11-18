@@ -42,3 +42,15 @@ jobs:
       - run: scripts/fetch-server-jar.sh
       - run: mvn -B -DskipTests package
       - run: DEBUG=1 scripts/e2e-k8s.sh
+  integration-postgres:
+    # same integration test, but SonarQube uses an external PostgreSQL instead of the embedded H2
+    runs-on: ubuntu-24.04
+    needs: build
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with: {distribution: temurin, java-version: "21", cache: maven}
+      - run: pip install cryptography
+      - run: scripts/fetch-server-jar.sh
+      - run: mvn -B -DskipTests package
+      - run: DB=postgres scripts/integration/run.sh

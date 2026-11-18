@@ -13,7 +13,7 @@ The same jar (built against 26.10) runs the full integration test in a real Sona
 | other 26.x | expected to work, **not tested**: add the version to the CI matrix before relying on it |
 | 25.x and older | unsupported; the extension disables itself with an ERROR if an internal API it needs is missing. That guard checks the classes and methods it calls, **not** every behaviour change or the container wiring, so test upgrades on staging |
 
-The Helm values (`deploy/helm/values-sonar-jwt-auth.yaml`) and the "Kubernetes API server" key source are installed and exercised for real, with the official chart (2026.5.x) in k3d, by the `k8s-e2e` CI job. What has **not** been done: a published release/image, managed-cloud issuers (EKS/GKE), and non-H2 databases.
+The Helm values (`deploy/helm/values-sonar-jwt-auth.yaml`) and the "Kubernetes API server" key source are installed and exercised for real, with the official chart (2026.5.x) in k3d, by the `k8s-e2e` CI job. The integration test also runs against an external PostgreSQL (`DB=postgres`, CI job `integration-postgres`). What has **not** been done: a published release/image and managed-cloud issuers (EKS/GKE).
 Other editions and multi-node (DCE) SonarQube are untested.
 **Upgrade procedure:** (1) read the release notes for a jar built for the new version, (2) upgrade the jar and SonarQube together,
 (3) check the boot log for `extension registered`, (4) run `scripts/integration/run.sh` against a staging instance.
@@ -25,7 +25,7 @@ Other editions and multi-node (DCE) SonarQube are untested.
 - A JWT session can only call the scanner endpoints in `allowedPathPrefixes`, and with `projectKeyPattern` only the projects it names. Requests whose path
   looks like routing tricks (`..`, `;`, `%`, `//`) are refused.
 - **Denials surface as HTTP 401** with the reason in the SonarQube log (SonarQube's authentication layer cannot return 403 from this hook).
-- **Revocation is by expiry**: there is no per-token revocation. Keep `expirationSeconds` short (Kubernetes: 600) and the lifetime cap on. Keys removed from the
+- **Revocation is by expiry**: there is no per-token revocation. Keep `expirationSeconds` short (Kubernetes: 600) and set `maxTokenLifetimeSeconds` just above it (900). Keys removed from the
   JWKS stop working after the next refresh (every ≤10 min; a cached key set is trusted for at most 6 h if the issuer is unreachable).
 - The extension cannot see which permissions a group holds: do not put a group with *Administer* in `groups`.
 - Any identity with *Execute Analysis* can read global settings including secured ones (SonarQube lets scanners do that); `projectKeyPattern` cannot hide them.

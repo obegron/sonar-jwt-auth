@@ -51,6 +51,7 @@ For a private CA set `"caFile"` to a PEM file (the JVM trust store is then not u
     "issuer": "https://kubernetes.default.svc.cluster.local",
     "discoveryUrl": "https://oidc.tekton.example.org",
     "audiences": ["sonarqube"],
+    "maxTokenLifetimeSeconds": 900,
     "rules": [ {
       "subject": "system:serviceaccount:(?<ns>[a-z0-9-]+):(?<sa>[a-z0-9-]+)",
       "login": "tekton_${ns}_${sa}",
@@ -73,7 +74,7 @@ For a private CA set `"caFile"` to a PEM file (the JVM trust store is then not u
 | `rules[]` | first match wins |
 | `jwksFile` / `jwksUri` / `caFile` / `bearerTokenFile` / `allowForeignJwksHost` | how the keys are obtained, see step 3 |
 | `allowedPathPrefixes` | what a JWT session may call; default is exactly what `sonar-scanner` needs. Exact paths, or a prefix ending in `/`. **Widening it weakens `projectKeyPattern`**: only the built-in endpoints are scoped precisely, other paths are only checked for `projectKey`/`project`/`component`/`key`. `["*"]` is refused when any rule has a `projectKeyPattern` |
-| `maxTokenLifetimeSeconds` | default 86400: tokens valid longer than this (exp − iat) are refused. 0 disables |
+| `maxTokenLifetimeSeconds` | default 86400 (a safe upper bound, but revocation is by expiry only): **set it just above your tokens' lifetime**, e.g. 900 for `expirationSeconds: 600` as in the example. Tokens valid longer (exp − iat) are refused; 0 disables |
 | `clockSkewSeconds` | default 60 |
 | `allowInsecureHttp` | permit http discovery/JWKS (tests only) |
 
@@ -112,7 +113,7 @@ kubectl -n sonarqube create configmap sonar-jwt-auth-config --from-file=jwt-auth
 # edit deploy/helm/values-sonar-jwt-auth.yaml: image -> the init image you pushed in step 2
 helm upgrade --install sonarqube sonarqube/sonarqube -n sonarqube -f deploy/helm/values-sonar-jwt-auth.yaml --set monitoringPasscode=<secret>
 ```
-The values reference your init image (`your-registry.example.org/sonar-jwt-auth-init:<version>`, built in step 2): replace it before installing.
+The values reference your init image (`your-registry.example.org/sonar-jwt-auth-init:0.1.0`, built in step 2): replace both the registry **and the tag** with what you pushed (the version is in the jar file name, e.g. `0.1.0-SNAPSHOT`).
 **Database:** recent chart versions no longer bundle PostgreSQL — without `jdbcOverwrite` SonarQube uses its embedded H2, which is for evaluation only. For production configure an external database as usual.
 This install path is run for real, with the official chart, by the `k8s-e2e` CI job.
 ### c) Together with sonarqube-community-branch-plugin
@@ -121,9 +122,11 @@ Both are javaagents: list both in the same option, e.g.
 
 ## 6. Give the identity the least privilege it needs
 (The `deploy/` demo configs use the groups `tekton-scanners` / `jenkins-scanners`, which `scripts/bootstrap-sonar.sh` creates; use your own names in your config.)
-Provisioned users get the permissions of the groups you list, plus the default group and *Anyone*. Create a group once:
+Provisioned users get the permissions of the groups you list, plus the default group and *Anyone*. Create a group once.
+You need the URL of the new instance and an admin login: Docker → `http://localhost:9000`; Helm → `kubectl -n sonarqube port-forward svc/sonarqube-sonarqube 9000:9000` then `http://localhost:9000`.
+A fresh SonarQube has the login `admin` / password `admin`; change it first (`curl -u admin:admin -X POST $S/api/users/change_password -d login=admin -d previousPassword=admin -d password=<new>`).
 ```bash
-A='-u admin:<password>'; S=https://sonar.example.org
+A='-u admin:<new-password>'; S=http://localhost:9000    # or your public URL
 curl $A -X POST $S/api/user_groups/create -d name=ci-scanners
 curl $A -X POST $S/api/permissions/add_group -d groupName=ci-scanners -d permission=provisioning   # Create Projects
 curl $A -X POST $S/api/permissions/add_group -d groupName=ci-scanners -d permission=scan           # Execute Analysis
