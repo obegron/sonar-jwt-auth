@@ -20,7 +20,7 @@ Other editions and multi-node (DCE) SonarQube are untested.
 **Rollback:** remove the `-javaagent` option for this jar (SonarQube then behaves as if it was never installed; provisioned users and projects stay).
 
 ## Verifying a release
-Each release (from v0.1.1; v0.1.0 has none) is built by this repository's workflow, which signs a provenance attestation for the jar and for the init image (Sigstore, keyless: the signer is the workflow itself, no key of the maintainer is involved).
+Each release is built by this repository's workflow, which signs a provenance attestation for the jar and for the init image (Sigstore, keyless: the signer is the workflow itself, no key of the maintainer is involved).
 ```bash
 gh attestation verify sonar-jwt-auth-<version>.jar -R obegron/sonar-jwt-auth                     # the jar was built by obegron/sonar-jwt-auth CI from a tagged commit
 gh attestation verify oci://ghcr.io/obegron/sonar-jwt-auth-init:<version> -R obegron/sonar-jwt-auth   # same for the init image
