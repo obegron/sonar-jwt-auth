@@ -9,6 +9,11 @@ community:
 
 monitoringPasscode: change-me      # required by the chart
 
+# Key source "Kubernetes API server" (docs/INSTALL.md step 3A) reads the pod's own ServiceAccount token and CA, which this chart does NOT mount by default.
+# Not needed if all your sources use "jwksFile" or an https discoveryUrl: then leave it false.
+serviceAccount:
+  automountToken: true
+
 # 1. an init container copies the agent jar into a volume shared with the SonarQube container
 extraInitContainers:
   - name: install-sonar-jwt-auth

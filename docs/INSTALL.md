@@ -12,7 +12,7 @@ until you make them public (package settings) — otherwise give the pod an `ima
 ## 3. Tell SonarQube where the issuer's public keys are
 Pick one `source` style per issuer. Nothing to install on the issuer side in any of them.
 
-**A. Same Kubernetes cluster as SonarQube — read the API server directly.** The pod's own ServiceAccount may read the discovery endpoints
+**A. Same Kubernetes cluster as SonarQube — read the API server directly.** (The official Helm chart does not mount a ServiceAccount token by default: set `serviceAccount.automountToken: true`, as `deploy/helm/values-sonar-jwt-auth.yaml` does. Without it the pod has no `ca.crt`/`token` and the log says `cannot load caFile ... NoSuchFileException`.) The pod's own ServiceAccount may read the discovery endpoints
 (`system:service-account-issuer-discovery` is bound to every ServiceAccount by default):
 ```json
 { "name": "tekton", "issuer": "https://kubernetes.default.svc.cluster.local",

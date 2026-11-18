@@ -41,6 +41,7 @@ Other editions and multi-node (DCE) SonarQube are untested.
 | `no config file ... DISABLED` | set `SONAR_JWT_AUTH_CONFIG` / mount the file |
 | `INVALID config ...` | fix the JSON; previous config (if any) stays active |
 | `source 'x': loaded N signing key(s)` | issuer reachable |
+| `cannot load caFile ... NoSuchFileException` | the pod has no ServiceAccount token/CA: Helm chart default `serviceAccount.automountToken: false` (set it true for key source A) |
 | `key refresh failed, keeping previous keys` | issuer/jwks unreachable, wrong `issuer`, untrusted certificate (`caFile`), jwks_uri not https or on another host, or unreadable `jwksFile`/token file |
 | `rejected token ...: token expired / audience not accepted / signature mismatch / no key / subject ... matches no rule / token lifetime exceeds` | self-explanatory; check clock, audience, rules |
 | `... may not call <path>` | add the path to `allowedPathPrefixes` if intended |
