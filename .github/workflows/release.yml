@@ -27,7 +27,7 @@ jobs:
           v="${RAW_VERSION#v}"
           [[ "$v" =~ ^[0-9A-Za-z._-]+$ ]] || { echo "bad version"; exit 1; }
           echo "VERSION=$v" >> "$GITHUB_ENV"
-      - run: mvn -B versions:set -DnewVersion=$VERSION -DgenerateBackupPoms=false && mvn -B verify
+      - run: scripts/mvn-retry.sh -B versions:set -DnewVersion=$VERSION -DgenerateBackupPoms=false && scripts/mvn-retry.sh -B verify
       - run: scripts/integration/run.sh
       - run: cp target/sonar-jwt-auth-$VERSION.jar docker/sonar-jwt-auth.jar
       - name: Checksums

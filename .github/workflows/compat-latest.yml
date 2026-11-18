@@ -20,8 +20,8 @@ jobs:
           print(max(names, key=lambda n: tuple(int(x) for x in n.split("-")[0].split("."))))')
           echo "newest Community Build: $tag"; echo "TAG=$tag" >> "$GITHUB_ENV"
       - name: Build the shipped jar (against the primary version, 26.10)
-        run: scripts/fetch-server-jar.sh && mvn -B -DskipTests package
+        run: scripts/fetch-server-jar.sh && scripts/mvn-retry.sh -B -DskipTests package
       - name: Integration test of that jar on the newest SonarQube
         run: SONAR_IMAGE=sonarqube:$TAG scripts/integration/run.sh
       - name: Does it still compile and pass unit tests against the newest server jar?
-        run: scripts/fetch-server-jar.sh sonarqube:$TAG && mvn -B verify
+        run: scripts/fetch-server-jar.sh sonarqube:$TAG && scripts/mvn-retry.sh -B verify

@@ -13,7 +13,7 @@ jobs:
       - uses: actions/setup-java@v6
         with: {distribution: temurin, java-version: "21", cache: maven}
       - run: scripts/fetch-server-jar.sh sonarqube:${{ matrix.sonarqube }}
-      - run: mvn -B verify
+      - run: scripts/mvn-retry.sh -B verify
   integration:
     # the jar is built once (against 26.10) and run in a real SonarQube of each version: this is the compatibility evidence
     runs-on: ubuntu-24.04
@@ -28,7 +28,7 @@ jobs:
         with: {distribution: temurin, java-version: "21", cache: maven}
       - run: pip install cryptography
       - run: scripts/fetch-server-jar.sh
-      - run: mvn -B -DskipTests package
+      - run: scripts/mvn-retry.sh -B -DskipTests package
       - run: SONAR_IMAGE=sonarqube:${{ matrix.sonarqube }} scripts/integration/run.sh
   k8s-e2e:
     # official Helm chart + our values + key source "Kubernetes API server" + a scanner pod with a projected ServiceAccount token
@@ -40,7 +40,7 @@ jobs:
         with: {distribution: temurin, java-version: "21", cache: maven}
       - run: curl -s https://raw.githubusercontent.com/k3d-io/k3d/v5.8.3/install.sh | TAG=v5.8.3 bash
       - run: scripts/fetch-server-jar.sh
-      - run: mvn -B -DskipTests package
+      - run: scripts/mvn-retry.sh -B -DskipTests package
       - run: DEBUG=1 scripts/e2e-k8s.sh
   integration-postgres:
     # same integration test, but SonarQube uses an external PostgreSQL instead of the embedded H2
@@ -52,5 +52,5 @@ jobs:
         with: {distribution: temurin, java-version: "21", cache: maven}
       - run: pip install cryptography
       - run: scripts/fetch-server-jar.sh
-      - run: mvn -B -DskipTests package
+      - run: scripts/mvn-retry.sh -B -DskipTests package
       - run: DB=postgres scripts/integration/run.sh
