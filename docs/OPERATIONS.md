@@ -47,6 +47,14 @@ There is no metrics endpoint; the extension logs (logger `io.github.obegron.sona
 Alert on (log-based, e.g. Loki/ELK/CloudWatch filters): any `ERROR` from `io.github.obegron.sonarjwt`; the *absence* of `extension registered` after a SonarQube start;
 `DISABLED` (extension off); `key refresh failed` repeating (issuer unreachable); a sudden jump in `rejected=` (expired tokens, clock skew, rotated keys) or `denied=` (a pipeline reaching outside its scope).
 
+## "Not authorized" from sonar-scanner: which kind is it?
+SonarQube's authentication hook can only answer 401, so the scanner prints the same "Not authorized" whether the **token is bad** or the **identity is valid but refused**. The server log tells them apart:
+- `rejected token … token expired / audience not accepted / signature mismatch / no key / subject … matches no rule / lifetime exceeds` → the token itself is the problem (clock, audience, rules, key rotation).
+- `… may not call <path>` or `… denied on <path>: … outside the allowed scope / names no project` → the token is fine, the identity is out of its allowed paths or project prefix.
+- `maps to unknown/inactive SonarQube user`, `refusing to provision`, `deactivated by an administrator` → user-mapping problem.
+The 5-minute summary line counts them separately (`rejected=` vs `denied(scope/path/user)=`), so a rise in `denied` points at a pipeline reaching outside its scope.
+(A real 403 is not possible from this hook: SonarQube's authentication layer only turns an authentication failure into 401, and a low-privilege session would let a refused identity read other teams' project lists.)
+
 ## Log reference (logger `io.github.obegron.sonarjwt.*`)
 | Message (start) | Meaning / action |
 |---|---|
