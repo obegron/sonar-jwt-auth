@@ -17,7 +17,7 @@ serviceAccount:
 # 1. an init container copies the agent jar into a volume shared with the SonarQube container
 extraInitContainers:
   - name: install-sonar-jwt-auth
-    image: ghcr.io/obegron/sonar-jwt-auth-init:0.1.0
+    image: ghcr.io/obegron/sonar-jwt-auth-init:0.1.1
     imagePullPolicy: IfNotPresent
     command: ["cp", "/sonar-jwt-auth.jar", "/agent/sonar-jwt-auth.jar"]
     volumeMounts:
