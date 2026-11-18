@@ -31,6 +31,9 @@ c["sources"][0]["rules"].insert(0,{"subject":"system:serviceaccount:(?<ns>app[0-
   "groups":["tekton-scanners"],"projectKeyPattern":"${ns}_.*"})
 c["sources"][0]["rules"].insert(1,{"subject":"system:serviceaccount:(?<ns>team|team-dev):pipeline","login":"ns_${ns}","name":"Team ${ns}","autoProvision":True,
   "groups":["tekton-scanners"],"projectKeyPattern":"${ns}_.*"})
+# a Jenkins-like source that is deliberately NOT project-prefixed: every project key is fine, paths are still limited to the scanner's
+c["sources"].append({"name":"jenkinsish","issuer":"https://jenkins.test.invalid","jwksFile":"/opt/sonarqube/jwt-auth/file-jwks.json","audiences":["sonarqube"],
+  "rules":[{"subject":".*","login":"jenkins_ci","name":"Jenkins CI","autoProvision":True,"groups":["tekton-scanners"],"projectKeyPattern":".*"}]})
 c["sources"].append({"name":"filesrc","issuer":"https://file.test.invalid","jwksFile":"/opt/sonarqube/jwt-auth/file-jwks.json","audiences":["sonarqube"],
   "rules":[{"subject":"system:serviceaccount:(?<ns>[a-z0-9-]+):(?<sa>[a-z0-9-]+)","login":"file_${ns}_${sa}","autoProvision":True,"groups":["tekton-scanners"],"projectKeyPattern":"file-.*"}]})
 json.dump(c,open(p,"w"))
@@ -86,6 +89,12 @@ check "namespace 'team' can create team_a"                   "$(code -X POST -H 
 check "namespace 'team' cannot touch 'team-dev' projects"    "$(code -X POST -H "Authorization: Bearer $TA" $S/api/projects/create -d name=w -d project=team-dev_a)" 401
 check "namespace 'team-dev' can create team-dev_a"           "$(code -X POST -H "Authorization: Bearer $TD" $S/api/projects/create -d name=w -d project=team-dev_a)" 200
 check "three namespaces -> three distinct users" "$(curl -s "${ADMIN[@]}" "$S/api/users/search?q=Tekton+app&ps=20" | python3 -c 'import sys,json;print(len([u for u in json.load(sys.stdin)["users"] if u.get("externalProvider")=="jwt-auth"]))')" 3
+echo "Jenkins-style source without project prefixes:"
+JT=$(python3 scripts/integration/jwt_tool.py mint "$W" https://jenkins.test.invalid --sub "https://jenkins.example/job/anything")
+check "any project key is allowed (payments-api)"      "$(code -X POST -H "Authorization: Bearer $JT" $S/api/projects/create -d name=p -d project=payments-api)" 200
+check "any project key is allowed (Some.Other:key_1)"  "$(code -X POST -H "Authorization: Bearer $JT" $S/api/projects/create -d name=p -d project=Some.Other:key_1)" 200
+check "...but still only the scanner's endpoints"      "$(code -H "Authorization: Bearer $JT" $S/api/users/search)" 401
+check "...and a request naming no project is refused"  "$(code -X POST -H "Authorization: Bearer $JT" $S/api/ce/submit)" 401
 check "ordinary SonarQube token still works"            "$(code -u "$(curl -s "${ADMIN[@]}" -X POST $S/api/user_tokens/generate -d name=t | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])'):" $S/api/users/current)" 200
 
 echo "concurrent first use of a NEW identity (8 parallel requests):"

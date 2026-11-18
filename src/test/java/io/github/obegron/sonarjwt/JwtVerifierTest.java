@@ -283,6 +283,14 @@ class JwtVerifierTest {
     assertEquals(List.of(), good.warnings);
   }
 
+  @Test void anUnscopedRuleIsDeclaredWithDotStarAndRaisesNoWarning() throws Exception {
+    String head = "{\"name\":\"jenkins\",\"issuer\":\"https://i\",\"audiences\":[\"x\"],";
+    AuthConfig c = AuthConfig.parse(config(head + "\"rules\":[{\"subject\":\".*\",\"login\":\"jenkins_ci\",\"autoProvision\":true,\"projectKeyPattern\":\".*\"}]}"));
+    assertEquals(List.of(), c.warnings);                                         // an explicit ".*" is a deliberate choice: no warning
+    var pattern = c.sources.get(0).rules.get(0).projectPattern;
+    assertTrue(pattern.matcher("payments-api").matches() && pattern.matcher("Some.Other:key_1").matches());
+  }
+
   @Test void aRefreshReturningNoKeysKeepsTheWorkingOnes() throws Exception {
     Cluster c = new Cluster("http://t", "k1"); c.publish(web, ISS);
     JwtVerifier v = verifier(config(source("t", "http://t", ".*", "uu")));

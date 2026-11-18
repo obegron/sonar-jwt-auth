@@ -153,7 +153,13 @@ volumes:
 #   export SONAR_TOKEN="$(cat /var/run/secrets/sonar/token)"
 #   sonar-scanner -Dsonar.host.url=https://sonar.example.org -Dsonar.projectKey=tekton-myapp
 ```
-Jenkins: use the OIDC token your Jenkins issues (e.g. the *OpenID Connect Provider* plugin's ID-token credential, audience `sonarqube`) as `SONAR_TOKEN`.
+Jenkins: each Jenkins is its own `source` (its own issuer/keys), so you decide per source whether projects need a prefix. A Jenkins that should be free to use any project key:
+```json
+{ "name": "jenkins", "issuer": "https://jenkins.example.org", "discoveryUrl": "https://jenkins.example.org", "audiences": ["sonarqube"], "maxTokenLifetimeSeconds": 900,
+  "rules": [ { "subject": ".*", "login": "jenkins_ci", "name": "Jenkins CI", "autoProvision": true, "groups": ["ci-scanners"], "projectKeyPattern": ".*" } ] }
+```
+`"projectKeyPattern": ".*"` states "any project" on purpose (no config warning; an *absent* pattern also means unscoped but logs a warning). Paths are still limited to what the scanner needs. Tekton sources keep their own `${ns}_.*` prefixes next to it.
+Use the OIDC token your Jenkins issues (e.g. the *OpenID Connect Provider* plugin's ID-token credential, audience `sonarqube`) as `SONAR_TOKEN`.
 Branch analysis needs `sonar.branch.name` and the branch plugin, as before.
 
 ## 8. Verify
