@@ -81,7 +81,10 @@ public final class AuthConfig {
      * between placeholders, so two different subjects can never produce the same login.
      */
     public String login;
-    /** Optional regex: project keys in the request must match entirely. */
+    /**
+     * Optional regex: project keys in the request must match entirely. May use the same ${name} placeholders as {@link #login}
+     * (replaced by the quoted captured value), e.g. "${ns}-.*" gives every namespace its own project-key prefix with a single rule.
+     */
     public String projectKeyPattern;
     /** Create the user on first use (external user, provider "jwt-auth"). Existing users, including local ones, are never modified. */
     public boolean autoProvision;
@@ -137,7 +140,20 @@ public final class AuthConfig {
         // NOTE: a group that holds the Administer permission is NOT detected here; keep provisioned groups to Create Projects / Execute Analysis.
         try {
           r.subjectPattern = Pattern.compile(r.subject);
-          if (r.projectKeyPattern != null) r.projectPattern = Pattern.compile(r.projectKeyPattern);
+          java.util.Set<String> known = new java.util.HashSet<>(java.util.List.of("source"));
+          java.util.regex.Matcher g = Pattern.compile("\\(\\?<([A-Za-z][A-Za-z0-9]*)>").matcher(r.subject);
+          while (g.find()) known.add(g.group(1));
+          for (String tpl : java.util.Arrays.asList(r.login, r.name, r.projectKeyPattern)) {
+            if (tpl == null) continue;
+            for (String ph : JwtVerifier.placeholderNames(tpl)) if (!known.contains(ph))
+              problems.add(n + ": unknown placeholder ${" + ph + "} in '" + tpl + "' (available: " + known + ")");
+          }
+          if (r.projectKeyPattern != null) {
+            if (r.projectKeyPattern.contains("${")) Pattern.compile(r.projectKeyPattern.replaceAll("\\$\\{\\w+}", "x")); // syntax check only
+            else r.projectPattern = Pattern.compile(r.projectKeyPattern);
+          }
+          if (s.name != null) for (char ch : JwtVerifier.innerSeparators(r.login)) if (s.name.indexOf(ch) >= 0)
+            problems.add(n + ": source name contains '" + ch + "', which separates placeholders in login template '" + r.login + "' (every token would be refused as ambiguous)");
         } catch (PatternSyntaxException e) { problems.add(n + ": bad regex: " + e.getMessage()); }
       }
     }

@@ -9,7 +9,7 @@ The same jar (built against 26.10) is exercised by the full integration test in 
 | 26.9.x, 26.11.x | integration test (CI) + compile/unit (CI); see the CI badge/run for the current result |
 | anything else | unsupported: if an internal API it needs is missing, the extension disables itself with an ERROR at startup. That guard checks the classes and methods it calls, **not** every behaviour change or the container wiring, so test upgrades on staging |
 
-Helm values (`deploy/helm/values-sonar-jwt-auth.yaml`) were rendered against chart 2026.5.1005 and accepted by a server-side dry run; the init-container jar copy was run for real; a full chart install was **not** performed.
+The Helm values (`deploy/helm/values-sonar-jwt-auth.yaml`) and the "Kubernetes API server" key source are installed and exercised for real, with the official chart (2026.5.x) in k3d, by the `k8s-e2e` CI job. What has **not** been done: a published release/image, managed-cloud issuers (EKS/GKE), and non-H2 databases.
 Other editions and multi-node (DCE) SonarQube are untested.
 **Upgrade procedure:** (1) read the release notes for a jar built for the new version, (2) upgrade the jar and SonarQube together,
 (3) check the boot log for `extension registered`, (4) run `scripts/integration/run.sh` against a staging instance.
@@ -51,7 +51,9 @@ Repeated warnings are throttled to one per minute per message.
 ## Hardening checklist
 - `https` discovery, short-lived tokens, `audiences` specific to SonarQube, `projectKeyPattern` on every rule.
 - Distinct `--service-account-issuer` per Kubernetes cluster (clusters sharing an issuer string are told apart by their keys, but distinct issuers are clearer and avoid ambiguity if a key is ever reused).
-- Restrict who can create ServiceAccounts in namespaces your rules match.
+- Restrict who can create ServiceAccounts in namespaces your rules match. Every new matching identity that scans becomes a SonarQube user and users are never
+  removed automatically: review/deactivate stale `jwt-auth` users from time to time (Administration → Security → Users, filter by provider).
+- Prefer `${ns}`-scoped `projectKeyPattern`s (or one rule per team) over one shared pattern, so teams cannot touch each other's projects.
 
 ## Licence
 Apache-2.0 (see `LICENSE`). The build compiles against SonarQube's server jar (LGPL-3.0) as a `system`-scoped, never-packaged dependency; the released jar

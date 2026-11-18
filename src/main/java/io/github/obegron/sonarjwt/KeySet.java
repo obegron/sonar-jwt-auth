@@ -41,9 +41,14 @@ final class KeySet {
   private static final Logger LOG = LoggerFactory.getLogger(KeySet.class);
   private static final ObjectMapper JSON = new ObjectMapper();
   private static final Duration TTL = Duration.ofMinutes(10);
+  /** A key file is local and cheap to re-read, so removals take effect quickly. */
+  private static final Duration FILE_TTL = Duration.ofSeconds(10);
   private static final Duration MIN_RETRY = Duration.ofSeconds(10);
   private static final Duration MAX_STALE = Duration.ofHours(6);
   private static final long WAIT_SECONDS = 3;
+  /** Overall deadline for reading one response body (tests shorten it). */
+  static volatile long readDeadlineSeconds = 15;
+  private static final ExecutorService READER = Executors.newCachedThreadPool(r -> { Thread t = new Thread(r, "jwt-auth-keys-read"); t.setDaemon(true); return t; });
   /** Small shared pool: a hung issuer ties up one worker for at most its timeouts, not the other sources. */
   private static final ExecutorService EXEC = Executors.newFixedThreadPool(4, r -> { Thread t = new Thread(r, "jwt-auth-keys"); t.setDaemon(true); return t; });
   private static final int MAX_BODY = 1 << 20;
@@ -56,7 +61,11 @@ final class KeySet {
     HttpClient.Builder b = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).followRedirects(HttpClient.Redirect.NEVER);
     if (src.caFile != null) {
       try { b.sslContext(sslContextTrusting(Path.of(src.caFile))); }
-      catch (Exception e) { LOG.error("jwt-auth source '{}': cannot load caFile {}: {}", src.name, src.caFile, e.toString()); }
+      catch (Exception e) {
+        LOG.error("jwt-auth source '{}': cannot load caFile {}: {}", src.name, src.caFile, e.toString());
+        // fail closed: never fall back to the JVM trust store (and never send the bearer token over a connection the operator did not intend to trust)
+        return (url, authenticated) -> { throw new IllegalStateException("caFile " + src.caFile + " is unusable"); };
+      }
     }
     HttpClient client = b.build();
     return (url, authenticated) -> {
@@ -65,7 +74,13 @@ final class KeySet {
       HttpResponse<InputStream> r = client.send(rb.build(), HttpResponse.BodyHandlers.ofInputStream());
       try (InputStream in = r.body()) {
         if (r.statusCode() != 200) throw new IllegalStateException("HTTP " + r.statusCode() + " from " + url);
-        byte[] body = in.readNBytes(MAX_BODY + 1); // never buffer more than the cap
+        // the request timeout only covers the headers: bound the whole body read too (a slow-drip server must not hold a refresh thread)
+        java.util.concurrent.CompletableFuture<byte[]> read = java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+          try { return in.readNBytes(MAX_BODY + 1); } catch (java.io.IOException e) { throw new java.io.UncheckedIOException(e); } // never buffer more than the cap
+        }, READER);
+        byte[] body;
+        try { body = read.get(readDeadlineSeconds, TimeUnit.SECONDS); }
+        catch (java.util.concurrent.TimeoutException e) { in.close(); read.cancel(true); throw new IllegalStateException("response from " + url + " too slow"); }
         if (body.length > MAX_BODY) throw new IllegalStateException("response from " + url + " exceeds " + MAX_BODY + " bytes");
         return new String(body, java.nio.charset.StandardCharsets.UTF_8);
       }
@@ -105,7 +120,7 @@ final class KeySet {
   /** The key for {@code kid}. An unknown kid triggers one rate-limited refresh that the caller waits for (max 3s); a stale cache refreshes in the background. */
   PublicKey find(String kid) {
     PublicKey k = keys.get(kid);
-    boolean fresh = Duration.between(fetchedAt, clock.instant()).compareTo(TTL) < 0;
+    boolean fresh = Duration.between(fetchedAt, clock.instant()).compareTo(source.jwksFile != null ? FILE_TTL : TTL) < 0;
     if (k == null || !fresh) refreshAsync(k == null);
     if (Duration.between(fetchedAt, clock.instant()).compareTo(MAX_STALE) > 0) return null;
     return keys.get(kid);

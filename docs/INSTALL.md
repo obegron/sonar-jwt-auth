@@ -19,7 +19,10 @@ Pick one `source` style per issuer. Nothing to install on the issuer side in any
   "discoveryUrl": "https://kubernetes.default.svc", "jwksUri": "https://kubernetes.default.svc/openid/v1/jwks",
   "caFile": "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt", "bearerTokenFile": "/var/run/secrets/kubernetes.io/serviceaccount/token", ... }
 ```
-(`issuer` must equal what `kubectl get --raw /.well-known/openid-configuration` reports.)
+(`issuer` must equal what `kubectl get --raw /.well-known/openid-configuration` reports. This is the default for k3s/kubeadm; **managed clouds use their own issuer**,
+e.g. EKS `https://oidc.eks.<region>.amazonaws.com/id/<id>` and GKE `https://container.googleapis.com/v1/projects/<p>/locations/<l>/clusters/<c>` — those are
+public https endpoints, so use style C there, without bearer token.)
+This style is exercised end to end by the `k8s-e2e` CI job (`scripts/e2e-k8s.sh`: official Helm chart, this config, a scanner pod).
 
 **B. Another cluster, or SonarQube outside Kubernetes — a key file, no network.** Export the keys once and mount them next to the config:
 ```bash
@@ -29,7 +32,7 @@ kubectl create configmap sonar-jwt-auth-config --from-file=jwt-auth.json --from-
 ```json
 { "name": "jenkins", "issuer": "https://kubernetes.default.svc.cluster.local", "jwksFile": "/opt/sonarqube/jwt-auth/jenkins-jwks.json", ... }
 ```
-The file is re-read when it changes. Kubernetes only changes its signing keys when an operator rotates them: re-export then (a CronJob can do it).
+The file is re-read within ~10 seconds of a change (a removed key stops working then). Kubernetes only changes its signing keys when an operator rotates them: re-export then (a CronJob can do it).
 
 **C. Any OIDC issuer reachable over https** (Jenkins OIDC provider, a cloud IdP, a Kubernetes cluster exposed through an Ingress with TLS):
 `"discoveryUrl": "https://oidc.example.org"`. The `jwks_uri` it announces must be https and on the same host (`allowForeignJwksHost` to relax).
@@ -51,7 +54,7 @@ For a private CA set `"caFile"` to a PEM file (the JVM trust store is then not u
       "name": "Tekton ${ns}/${sa}",
       "autoProvision": true,
       "groups": ["ci-scanners"],
-      "projectKeyPattern": "tekton-.*" } ] },
+      "projectKeyPattern": "${ns}-.*" } ] },
   { "name": "jenkins", "issuer": "https://kubernetes.default.svc.cluster.local", "discoveryUrl": "https://oidc.jenkins.example.org",
     "audiences": ["sonarqube"],
     "rules": [ { "subject": "system:serviceaccount:jenkins:agent", "login": "jenkins_agent", "autoProvision": true, "groups": ["ci-scanners"], "projectKeyPattern": "jenkins-.*" } ] }
@@ -77,7 +80,7 @@ For a private CA set `"caFile"` to a PEM file (the JVM trust store is then not u
 | `login` | identity template; must start with literal text; `${source}` is the source name. Values captured from the token may not contain the literal separators between placeholders (so `a-b`+`c` can never equal `a`+`b-c`) — use `_` as separator for Kubernetes names |
 | `autoProvision` | create the user on first use (external user, provider `jwt-auth`). Otherwise `login` must name an existing user. A user of another origin with the same login is **never** adopted |
 | `name`, `groups` | display name / groups of provisioned users (groups must exist; `sonar-administrators` is refused). **Groups are re-synced every 5 minutes and replace the user's group memberships**, so manual additions are lost and a rule change takes up to 5 minutes to apply. Every user is also in SonarQube's default group (`sonar-users`) and gets the permissions granted to *Anyone* |
-| `projectKeyPattern` | regex; every project the request touches must match, and requests that cannot be tied to a project are refused |
+| `projectKeyPattern` | regex; every project the request touches must match, and requests that cannot be tied to a project are refused. May use the rule's placeholders: `"${ns}-.*"` gives **each namespace its own project-key prefix with one rule** (the captured value is regex-quoted). A fixed pattern such as `tekton-.*` is shared by every identity the rule matches: use one rule per team, or `${ns}`, when teams must not touch each other's projects |
 
 The file is re-read within ~10 s of a change (mount the ConfigMap as a **directory**, not `subPath`). An invalid file is logged and the previous config stays active.
 
@@ -94,11 +97,16 @@ docker run -d -p 9000:9000 -v $PWD/jwt-auth:/opt/sonarqube/jwt-auth:ro sonarqube
 ### b) Official Helm chart
 `kubectl create configmap sonar-jwt-auth-config --from-file=jwt-auth.json` then
 `helm upgrade --install sonarqube sonarqube/sonarqube -f deploy/helm/values-sonar-jwt-auth.yaml` — see the comments in that file.
+The values reference the init image `ghcr.io/obegron/sonar-jwt-auth-init:<version>`, which exists only after a release has been published (and, being a private
+package by default, needs to be made public or pulled with an `imagePullSecret`); until then build and push your own: `docker build -f docker/Dockerfile.init -t <your-registry>/sonar-jwt-auth-init:<version> docker`.
+**Database:** recent chart versions no longer bundle PostgreSQL — without `jdbcOverwrite` SonarQube uses its embedded H2, which is for evaluation only. For production configure an external database as usual.
+This install path is run for real, with the official chart, by the `k8s-e2e` CI job.
 ### c) Together with sonarqube-community-branch-plugin
 Both are javaagents: list both in the same option, e.g.
 `-javaagent:.../sonarqube-community-branch-plugin-26.10.0.jar=web -javaagent:.../sonar-jwt-auth.jar=web` (see `docker/Dockerfile.branch-plugin`).
 
 ## 6. Give the identity the least privilege it needs
+(The `deploy/` demo configs use the groups `tekton-scanners` / `jenkins-scanners`, which `scripts/bootstrap-sonar.sh` creates; use your own names in your config.)
 Provisioned users get the permissions of the groups you list, plus the default group and *Anyone*. Create a group once:
 ```bash
 A='-u admin:<password>'; S=https://sonar.example.org

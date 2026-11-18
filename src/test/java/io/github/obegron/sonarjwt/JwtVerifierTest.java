@@ -219,6 +219,56 @@ class JwtVerifierTest {
     assertEquals(0, p.waitFor(), out);
   }
 
+  // ---------------- per-identity project scope, placeholder validation, hardening of the fetcher
+
+  @Test void projectKeyPatternCanUseCapturedValuesQuoted() throws Exception {
+    Cluster c = new Cluster("http://t", "k1"); c.publish(web, ISS);
+    String cfg = config("{\"name\":\"t\",\"issuer\":\"" + ISS + "\",\"discoveryUrl\":\"http://t\",\"allowInsecureHttp\":true,\"audiences\":[\"sonarqube\"],\"rules\":["
+        + "{\"subject\":\"system:serviceaccount:(?<ns>[^:]+):(?<sa>[^:]+)\",\"login\":\"ci_${ns}_${sa}\",\"autoProvision\":true,\"projectKeyPattern\":\"${ns}-.*\"}]}");
+    JwtVerifier v = verifier(cfg);
+    var a = assertInstanceOf(JwtVerifier.Accepted.class, v.verify(token(c, Map.of("sub", "system:serviceaccount:team-a:bot"))));
+    assertTrue(a.projectKeyPattern().matcher("team-a-service").matches());
+    assertFalse(a.projectKeyPattern().matcher("team-b-service").matches());
+    // a captured value containing regex syntax ('.') matches only itself; values the login check refuses (a '*') never get this far
+    var dotted = assertInstanceOf(JwtVerifier.Accepted.class, v.verify(token(c, Map.of("sub", "system:serviceaccount:a.b:bot"))));
+    assertFalse(dotted.projectKeyPattern().matcher("axb-x").matches());
+    assertTrue(dotted.projectKeyPattern().matcher("a.b-x").matches());
+    assertInstanceOf(JwtVerifier.Rejected.class, v.verify(token(c, Map.of("sub", "system:serviceaccount:a.*:bot"))));
+  }
+
+  @Test void unknownPlaceholdersAndBadSourceNamesAreCaughtAtConfigLoad() {
+    String head = "\"issuer\":\"https://i\",\"audiences\":[\"x\"],";
+    String sub = "\"subject\":\"system:serviceaccount:(?<ns>[^:]+):(?<sa>[^:]+)\"";
+    assertThrows(IllegalArgumentException.class, () -> AuthConfig.parse(config("{\"name\":\"a\"," + head + "\"rules\":[{" + sub + ",\"login\":\"ci_${nss}_${sa}\"}]}")));
+    assertThrows(IllegalArgumentException.class, () -> AuthConfig.parse(config("{\"name\":\"a\"," + head + "\"rules\":[{" + sub + ",\"login\":\"ci_${ns}\",\"projectKeyPattern\":\"${team}-.*\"}]}")));
+    // a source name containing the separator makes every token "ambiguous": refuse the config instead of failing at request time
+    assertThrows(IllegalArgumentException.class, () -> AuthConfig.parse(config("{\"name\":\"tekton_prod\"," + head + "\"rules\":[{" + sub + ",\"login\":\"ci_${source}_${ns}\"}]}")));
+    assertDoesNotThrow(() -> AuthConfig.parse(config("{\"name\":\"tekton-prod\"," + head + "\"rules\":[{" + sub + ",\"login\":\"ci_${source}_${ns}\",\"projectKeyPattern\":\"${ns}-.*\"}]}")));
+  }
+
+  @Test void anUnusableCaFileFailsClosedInsteadOfFallingBackToTheJvmTrustStore() throws Exception {
+    Cluster c = new Cluster("https://localhost:1", "k1");
+    String src = "{\"name\":\"k\",\"issuer\":\"" + ISS + "\",\"discoveryUrl\":\"https://localhost:1\",\"caFile\":\"/nonexistent/ca.pem\","
+        + "\"audiences\":[\"sonarqube\"],\"rules\":[{\"subject\":\".*\",\"login\":\"tls-user\"}]}";
+    assertInstanceOf(JwtVerifier.Rejected.class, new JwtVerifier(AuthConfig.parse(config(src)), clock, null).verify(token(c, Map.of())));
+  }
+
+  @Test void aSlowDripResponseCannotHoldARefreshThreadForever() throws Exception {
+    com.sun.net.httpserver.HttpServer srv = com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+    srv.createContext("/", ex -> { ex.sendResponseHeaders(200, 100_000); ex.getResponseBody().write(new byte[10]); ex.getResponseBody().flush();
+      try { Thread.sleep(6000); } catch (InterruptedException ignored) { } ex.close(); });
+    srv.start();
+    long old = KeySet.readDeadlineSeconds; KeySet.readDeadlineSeconds = 1;
+    try {
+      Cluster c = new Cluster("http://127.0.0.1:" + srv.getAddress().getPort(), "k1");
+      String src = "{\"name\":\"slow\",\"issuer\":\"" + ISS + "\",\"jwksUri\":\"" + c.base + "/jwks\",\"allowInsecureHttp\":true,"
+          + "\"audiences\":[\"sonarqube\"],\"rules\":[{\"subject\":\".*\",\"login\":\"slow-user\"}]}";
+      long t0 = System.nanoTime();
+      assertInstanceOf(JwtVerifier.Rejected.class, new JwtVerifier(AuthConfig.parse(config(src)), clock, null).verify(token(c, Map.of())));
+      assertTrue((System.nanoTime() - t0) / 1_000_000_000 < 5, "caller waited at most WAIT_SECONDS");
+    } finally { KeySet.readDeadlineSeconds = old; srv.stop(0); }
+  }
+
   @Test void rejectsSubjectWithoutRule() throws Exception {
     Cluster c = new Cluster("http://t", "k1"); c.publish(web, ISS);
     var r = verifier(config(source("t", "http://t", "system:serviceaccount:ci:other", "u"))).verify(token(c, Map.of()));

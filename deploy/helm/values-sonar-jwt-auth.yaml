@@ -1,3 +1,5 @@
+# NOTE: the init image below exists once a release is published (private ghcr package by default) — otherwise build and push your own from docker/Dockerfile.init.
+# NOTE: without `jdbcOverwrite` the chart uses the embedded H2 (evaluation only); configure an external database for production.
 # Values for the official SonarQube chart (https://github.com/SonarSource/helm-chart-sonarqube) that install sonar-jwt-auth.
 #   kubectl create configmap sonar-jwt-auth-config --from-file=jwt-auth.json=my-config.json
 #   helm upgrade --install sonarqube sonarqube/sonarqube -f values-sonar-jwt-auth.yaml --set monitoringPasscode=...

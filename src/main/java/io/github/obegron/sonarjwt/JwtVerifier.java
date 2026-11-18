@@ -122,7 +122,13 @@ public final class JwtVerifier {
         String name = r.name == null ? sub : resolve(r.name, m, src.name);
         prov = new Provisioning(name.isBlank() ? sub : name, List.copyOf(r.groups));
       }
-      return new Accepted(src.name, sub, login, r.projectPattern, src.effectiveAllowedPaths(), prov);
+      Pattern scope = r.projectPattern;
+      if (r.projectKeyPattern != null && r.projectKeyPattern.contains("${")) {
+        // per-identity scope: ${ns}-style placeholders are replaced by the *quoted* captured value, so a value can never inject regex syntax
+        try { scope = Pattern.compile(resolve(r.projectKeyPattern, m, src.name, true)); }
+        catch (RuntimeException e) { return new Rejected("projectKeyPattern could not be resolved for sub " + Log.clean(sub)); }
+      }
+      return new Accepted(src.name, sub, login, scope, src.effectiveAllowedPaths(), prov);
     }
     return new Rejected("subject '" + Log.clean(sub) + "' matches no rule of source " + src.name);
   }
@@ -133,9 +139,7 @@ public final class JwtVerifier {
    * between two placeholders of the template (with "${ns}-${sa}", ns "a-b"/sa "c" would collide with ns "a"/sa "b-c").
    */
   static String ambiguousCapture(String template, Matcher m, String source) {
-    Set<Character> separators = new HashSet<>();
-    String[] literals = PLACEHOLDER.split(template, -1);
-    for (int i = 1; i < literals.length - 1; i++) for (char ch : literals[i].toCharArray()) separators.add(ch);
+    Set<Character> separators = innerSeparators(template);
     if (separators.isEmpty()) return null;
     Matcher p = PLACEHOLDER.matcher(template);
     while (p.find()) {
@@ -146,16 +150,35 @@ public final class JwtVerifier {
     return null;
   }
 
+  /** The literal characters that sit between two placeholders of a template. */
+  static Set<Character> innerSeparators(String template) {
+    Set<Character> separators = new HashSet<>();
+    String[] literals = PLACEHOLDER.split(template, -1);
+    for (int i = 1; i < literals.length - 1; i++) for (char ch : literals[i].toCharArray()) separators.add(ch);
+    return separators;
+  }
+
+  /** The names used as ${name} in a template. */
+  static List<String> placeholderNames(String template) {
+    List<String> out = new ArrayList<>();
+    Matcher p = PLACEHOLDER.matcher(template);
+    while (p.find()) out.add(p.group(1));
+    return out;
+  }
+
   private static String safeGroup(Matcher m, String name) { try { return m.group(name); } catch (IllegalArgumentException e) { return null; } }
 
-  private static String resolve(String template, Matcher m, String source) {
+  private static String resolve(String template, Matcher m, String source) { return resolve(template, m, source, false); }
+
+  private static String resolve(String template, Matcher m, String source, boolean quote) {
     Matcher p = PLACEHOLDER.matcher(template);
     StringBuilder sb = new StringBuilder();
     while (p.find()) {
       String v;
       if (p.group(1).equals("source")) v = source;
       else try { v = m.group(p.group(1)); } catch (IllegalArgumentException e) { v = null; }
-      p.appendReplacement(sb, Matcher.quoteReplacement(v == null ? "" : v));
+      String val = v == null ? "" : v;
+      p.appendReplacement(sb, Matcher.quoteReplacement(quote ? Pattern.quote(val) : val));
     }
     p.appendTail(sb);
     return sb.toString();
