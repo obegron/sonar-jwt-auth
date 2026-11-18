@@ -13,6 +13,8 @@ cleanup(){ [ -n "$PF_PID" ] && kill $PF_PID 2>/dev/null; if [ "$fail" -gt 0 ] ||
     echo "=== diagnostics ==="; kubectl -n $NS get pods -o wide 2>&1 | head
     echo "--- pod status:"; kubectl -n $NS get pod sonarqube-sonarqube-0 -o jsonpath='{.status.phase} {.status.reason} {.status.message}{"\n"}{range .status.initContainerStatuses[*]}init {.name}: {.state}{"\n"}{end}{range .status.containerStatuses[*]}{.name}: {.state} last={.lastState}{"\n"}{end}' 2>&1 | cut -c1-400
     echo "--- events:"; kubectl -n $NS get events --sort-by=.lastTimestamp 2>&1 | tail -20 | cut -c1-300
+    echo "--- runner disk:"; df -h / | tail -1
+    echo "--- elasticsearch / allocation hints:"; kubectl -n $NS logs sonarqube-sonarqube-0 -c sonarqube --previous 2>&1 | grep -iE 'watermark|unassigned|no_shard|allocation|disk|RED|max virtual|map count|bootstrap' | head -12 | cut -c1-260
     echo "--- node:"; kubectl describe node 2>&1 | grep -E 'Conditions|MemoryPressure|DiskPressure|PIDPressure|ephemeral|memory ' | head -12
     for c in install-sonar-jwt-auth sonarqube; do echo "--- logs $c:"; kubectl -n $NS logs sonarqube-sonarqube-0 -c $c 2>&1 | tail -12 | cut -c1-250; echo "--- previous logs $c:"; kubectl -n $NS logs sonarqube-sonarqube-0 -c $c --previous 2>&1 | grep -E 'jwt-auth|ERROR|Caused|Exception' | tail -8 | cut -c1-250; done
   fi
@@ -29,10 +31,11 @@ helm repo add sonarqube https://SonarSource.github.io/helm-chart-sonarqube >/dev
 kubectl create namespace $NS >/dev/null
 kubectl -n $NS create configmap sonar-jwt-auth-config --from-file=jwt-auth.json=deploy/jwt-auth-config.k8s-e2e.json >/dev/null
 sed 's#ghcr.io/obegron/sonar-jwt-auth-init:[0-9.]*#sonar-jwt-auth-init:e2e#' deploy/helm/values-sonar-jwt-auth.yaml > "$W/values.yaml"
+echo "runner disk before install:"; df -h / | tail -1
 echo "helm install (official chart, embedded H2: test only)..."
 helm install sonarqube sonarqube/sonarqube -n $NS -f "$W/values.yaml" --set monitoringPasscode=e2e-passcode \
   --set initSysctl.enabled=false --set initFs.enabled=false --set 'sonarProperties.sonar\.es\.bootstrap\.checks\.disable=true' \
-  --set resources.requests.memory=1500Mi --set resources.requests.cpu=1000m --set resources.limits.memory=5Gi --set resources.limits.cpu=3000m --set persistence.enabled=false \
+  --set resources.requests.memory=1500Mi --set resources.requests.cpu=1000m --set resources.limits.memory=5Gi --set resources.limits.cpu=3000m --set persistence.enabled=false --set emptyDir.medium=Memory \
   --wait --timeout 15m >"$W/helm.log" 2>&1
 helm_rc=$?
 check "helm install succeeds" "$helm_rc" 0
