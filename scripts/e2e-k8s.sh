@@ -10,8 +10,12 @@ pass=0; fail=0
 check(){ if [ "$2" = "$3" ]; then echo "  ok   $1"; pass=$((pass+1)); else echo "  FAIL $1 (expected $3, got $2)"; fail=$((fail+1)); fi; }
 W=$(mktemp -d)
 cleanup(){ kill $PF_PID 2>/dev/null; if [ "$fail" -gt 0 ] || [ "${DEBUG:-}" = 1 ]; then
-    echo "--- diagnostics"; kubectl -n $NS get pods 2>&1 | head; kubectl -n $NS describe pod sonarqube-sonarqube-0 2>&1 | tail -25
-    kubectl -n $NS logs sonarqube-sonarqube-0 -c install-sonar-jwt-auth 2>&1 | tail -5; kubectl -n $NS logs sonarqube-sonarqube-0 2>&1 | grep -E 'jwt-auth|ERROR' | tail -15 | cut -c1-240; fi
+    echo "=== diagnostics ==="; kubectl -n $NS get pods -o wide 2>&1 | head
+    echo "--- pod status:"; kubectl -n $NS get pod sonarqube-sonarqube-0 -o jsonpath='{.status.phase} {.status.reason} {.status.message}{"\n"}{range .status.initContainerStatuses[*]}init {.name}: {.state}{"\n"}{end}{range .status.containerStatuses[*]}{.name}: {.state} last={.lastState}{"\n"}{end}' 2>&1 | cut -c1-400
+    echo "--- events:"; kubectl -n $NS get events --sort-by=.lastTimestamp 2>&1 | tail -20 | cut -c1-300
+    echo "--- node:"; kubectl describe node 2>&1 | grep -E 'Conditions|MemoryPressure|DiskPressure|PIDPressure|ephemeral|memory ' | head -12
+    for c in install-sonar-jwt-auth sonarqube; do echo "--- logs $c:"; kubectl -n $NS logs sonarqube-sonarqube-0 -c $c 2>&1 | tail -12 | cut -c1-250; echo "--- previous logs $c:"; kubectl -n $NS logs sonarqube-sonarqube-0 -c $c --previous 2>&1 | grep -E 'jwt-auth|ERROR|Caused|Exception' | tail -8 | cut -c1-250; done
+  fi
   [ "${KEEP:-}" = 1 ] || k3d cluster delete $CLUSTER >/dev/null 2>&1; rm -rf "$W"; }
 trap cleanup EXIT
 
@@ -30,8 +34,9 @@ helm install sonarqube sonarqube/sonarqube -n $NS -f "$W/values.yaml" --set moni
   --set initSysctl.enabled=false --set initFs.enabled=false --set 'sonarProperties.sonar\.es\.bootstrap\.checks\.disable=true' \
   --set resources.requests.memory=1500Mi --set resources.requests.cpu=300m --set resources.limits.memory=4Gi --set persistence.enabled=false \
   --wait --timeout 15m >"$W/helm.log" 2>&1
-check "helm install succeeds" "$?" 0
-tail -3 "$W/helm.log" | grep -iE 'error|fail' ; true
+helm_rc=$?
+check "helm install succeeds" "$helm_rc" 0
+if [ $helm_rc -ne 0 ]; then echo "--- helm output:"; tail -15 "$W/helm.log"; exit 1; fi   # nothing else can work: stop, the trap prints diagnostics
 
 kubectl -n $NS port-forward svc/sonarqube-sonarqube $PF_PORT:9000 >/dev/null 2>&1 & PF_PID=$!
 S=http://localhost:$PF_PORT
