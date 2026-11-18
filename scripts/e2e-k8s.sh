@@ -32,7 +32,7 @@ sed 's#ghcr.io/obegron/sonar-jwt-auth-init:[0-9.]*#sonar-jwt-auth-init:e2e#' dep
 echo "helm install (official chart, embedded H2: test only)..."
 helm install sonarqube sonarqube/sonarqube -n $NS -f "$W/values.yaml" --set monitoringPasscode=e2e-passcode \
   --set initSysctl.enabled=false --set initFs.enabled=false --set 'sonarProperties.sonar\.es\.bootstrap\.checks\.disable=true' \
-  --set resources.requests.memory=1500Mi --set resources.requests.cpu=300m --set resources.limits.memory=4Gi --set persistence.enabled=false \
+  --set resources.requests.memory=1500Mi --set resources.requests.cpu=1000m --set resources.limits.memory=5Gi --set resources.limits.cpu=3000m --set persistence.enabled=false \
   --wait --timeout 15m >"$W/helm.log" 2>&1
 helm_rc=$?
 check "helm install succeeds" "$helm_rc" 0
