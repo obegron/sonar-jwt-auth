@@ -83,7 +83,7 @@ For a private CA set `"caFile"` to a PEM file (the JVM trust store is then not u
 | `login` | identity template; must start with literal text; `${source}` is the source name. Values captured from the token may not contain the literal separators between placeholders (so `a-b`+`c` can never equal `a`+`b-c`) — use `_` as separator for Kubernetes names |
 | `autoProvision` | create the user on first use (external user, provider `jwt-auth`). Otherwise `login` must name an existing user. A user of another origin with the same login is **never** adopted |
 | `name`, `groups` | display name / groups of provisioned users (groups must exist; `sonar-administrators` is refused). **Groups are re-synced every 5 minutes and replace the user's group memberships**, so manual additions are lost and a rule change takes up to 5 minutes to apply. Every user is also in SonarQube's default group (`sonar-users`) and gets the permissions granted to *Anyone* |
-| `projectKeyPattern` | regex; every project the request touches must match, and requests that cannot be tied to a project are refused. May use the rule's placeholders: `"${ns}_.*"` gives **each namespace its own project-key prefix with one rule** (the captured value is regex-quoted). **Use `_` (or `:`) after the placeholder, never `-`**: Kubernetes names contain `-`, so `${ns}-.*` would let namespace `team` touch the projects of `team-dev` (config load warns about it). A rule with `autoProvision` and no `projectKeyPattern` lets every matching identity overwrite any project (config load warns). A fixed pattern such as `tekton-.*` is shared by every identity the rule matches: use one rule per team, or `${ns}`, when teams must not touch each other's projects |
+| `projectKeyPattern` | regex; every project the request touches must match, and requests that cannot be tied to a project are refused. May use the rule's placeholders: `"${ns}_.*"` gives **each namespace its own project-key prefix with one rule** (the captured value is regex-quoted). **Use `_` (or `:`) after the placeholder, never `-`**: Kubernetes names contain `-`, so `${ns}-.*` would let namespace `team` touch the projects of `team-dev` (config load warns about it). `_` is safe only because Kubernetes namespace/ServiceAccount names cannot contain it: for subjects whose values can (e.g. Jenkins job names) pick a separator the values cannot contain, or write one rule per team with a fixed pattern. A rule with `autoProvision` and no `projectKeyPattern` lets every matching identity overwrite any project (config load warns). A fixed pattern such as `tekton-.*` is shared by every identity the rule matches: use one rule per team, or `${ns}`, when teams must not touch each other's projects |
 
 The file is re-read within ~10 s of a change (mount the ConfigMap as a **directory**, not `subPath`). An invalid file is logged and the previous config stays active.
 
@@ -92,14 +92,26 @@ The ConfigMap must be mounted as a **directory** at `/opt/sonarqube/jwt-auth` (n
 The jar is a **javaagent**, not a plugin: do **not** put it in `extensions/plugins/`. Add to the web process JVM options:
 `-javaagent:/path/to/sonar-jwt-auth.jar=web` and mount the config at `/opt/sonarqube/jwt-auth/jwt-auth.json` (or set `SONAR_JWT_AUTH_CONFIG`).
 
+**Before the first scan, create the groups your rules name** (step 6) — provisioned users only get the permissions of groups that exist.
+
 ### a) Docker
+The jar from step 2 is already at `docker/sonar-jwt-auth.jar` (if you downloaded a release jar instead, copy it there).
 ```bash
-cp sonar-jwt-auth-*.jar docker/sonar-jwt-auth.jar && docker build -t sonarqube-jwt docker
-docker run -d -p 9000:9000 -v $PWD/jwt-auth:/opt/sonarqube/jwt-auth:ro sonarqube-jwt     # jwt-auth/jwt-auth.json
+docker build -t sonarqube-jwt docker
+mkdir -p jwt-auth && cp my-jwt-auth.json jwt-auth/jwt-auth.json                              # your config from step 4
+docker run -d -p 9000:9000 -v $PWD/jwt-auth:/opt/sonarqube/jwt-auth:ro sonarqube-jwt
 ```
+This starts SonarQube as in its own quick start: the Linux host needs `vm.max_map_count>=524288` (Elasticsearch; or add `-e SONAR_ES_BOOTSTRAP_CHECKS_DISABLE=true` for evaluation), and it uses the embedded H2 database, which is for evaluation only —
+for production add an external PostgreSQL (`-e SONAR_JDBC_URL=... -e SONAR_JDBC_USERNAME=... -e SONAR_JDBC_PASSWORD=...`) and a volume for `/opt/sonarqube/data`.
+
 ### b) Official Helm chart
-`kubectl create configmap sonar-jwt-auth-config --from-file=jwt-auth.json` then
-`helm upgrade --install sonarqube sonarqube/sonarqube -f deploy/helm/values-sonar-jwt-auth.yaml` — see the comments in that file.
+```bash
+helm repo add sonarqube https://SonarSource.github.io/helm-chart-sonarqube && helm repo update
+kubectl create namespace sonarqube
+kubectl -n sonarqube create configmap sonar-jwt-auth-config --from-file=jwt-auth.json=my-jwt-auth.json     # your config from step 4
+# edit deploy/helm/values-sonar-jwt-auth.yaml: image -> the init image you pushed in step 2
+helm upgrade --install sonarqube sonarqube/sonarqube -n sonarqube -f deploy/helm/values-sonar-jwt-auth.yaml --set monitoringPasscode=<secret>
+```
 The values reference your init image (`your-registry.example.org/sonar-jwt-auth-init:<version>`, built in step 2): replace it before installing.
 **Database:** recent chart versions no longer bundle PostgreSQL — without `jdbcOverwrite` SonarQube uses its embedded H2, which is for evaluation only. For production configure an external database as usual.
 This install path is run for real, with the official chart, by the `k8s-e2e` CI job.

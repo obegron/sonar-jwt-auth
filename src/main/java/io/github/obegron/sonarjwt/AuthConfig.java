@@ -86,7 +86,7 @@ public final class AuthConfig {
     public String login;
     /**
      * Optional regex: project keys in the request must match entirely. May use the same ${name} placeholders as {@link #login}
-     * (replaced by the quoted captured value), e.g. "${ns}-.*" gives every namespace its own project-key prefix with a single rule.
+     * (replaced by the quoted captured value), e.g. "${ns}_.*" gives every namespace its own project-key prefix with a single rule (use a separator that cannot occur in the value: "-" would let namespace "team" match the projects of "team-dev").
      */
     public String projectKeyPattern;
     /** Create the user on first use (external user, provider "jwt-auth"). Existing users, including local ones, are never modified. */
