@@ -8,6 +8,7 @@ On a version where an internal API it uses is missing it **switches itself off w
 **Download a release** — <https://github.com/obegron/sonar-jwt-auth/releases> — and verify it:
 ```bash
 gh release download v0.1.0 -R obegron/sonar-jwt-auth            # or download sonar-jwt-auth-0.1.0.jar and SHA256SUMS from the release page
+gh attestation verify sonar-jwt-auth-*.jar -R obegron/sonar-jwt-auth     # optional, from v0.1.1: proves it was built by this repo's CI (docs/OPERATIONS.md#verifying-a-release)
 sha256sum -c SHA256SUMS && mkdir -p docker && cp sonar-jwt-auth-0.1.0.jar docker/sonar-jwt-auth.jar     # run from a checkout of this repo, for the Docker route
 ```
 Each release also publishes the init-container image `ghcr.io/obegron/sonar-jwt-auth-init:<version>` (public), which the Helm values use as is.

@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version: {description: "version to build (dry run: builds and tests, publishes nothing)", default: "0.0.0-dryrun"}
-permissions: {contents: write, packages: write}
+permissions: {contents: write, packages: write, id-token: write, attestations: write}
 jobs:
   release:
     runs-on: ubuntu-24.04
@@ -35,10 +35,25 @@ jobs:
       - name: Build init-container image
         run: docker build -t ghcr.io/${{ github.repository_owner }}/sonar-jwt-auth-init:$VERSION -f docker/Dockerfile.init docker
       - name: Publish image
+        id: push
         if: env.PUBLISH == 'true'
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
-          docker push ghcr.io/${{ github.repository_owner }}/sonar-jwt-auth-init:$VERSION
+          img=ghcr.io/${{ github.repository_owner }}/sonar-jwt-auth-init
+          docker push $img:$VERSION
+          echo "digest=$(docker inspect --format='{{index .RepoDigests 0}}' $img:$VERSION | cut -d@ -f2)" >> "$GITHUB_OUTPUT"
+      - name: Attest the jar (build provenance)
+        if: env.PUBLISH == 'true'
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: target/sonar-jwt-auth-${{ env.VERSION }}.jar
+      - name: Attest the init image (build provenance)
+        if: env.PUBLISH == 'true'
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-name: ghcr.io/${{ github.repository_owner }}/sonar-jwt-auth-init
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
       - uses: softprops/action-gh-release@v3
         if: env.PUBLISH == 'true'
         with: {files: "target/sonar-jwt-auth-*.jar\nSHA256SUMS", generate_release_notes: true}

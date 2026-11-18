@@ -13,11 +13,20 @@ The same jar (built against 26.10) runs the full integration test in a real Sona
 | other 26.x | expected to work, **not tested**: add the version to the CI matrix before relying on it |
 | 25.x and older | unsupported; the extension disables itself with an ERROR if an internal API it needs is missing. That guard checks the classes and methods it calls, **not** every behaviour change or the container wiring, so test upgrades on staging |
 
-The Helm values (`deploy/helm/values-sonar-jwt-auth.yaml`) and the "Kubernetes API server" key source are installed and exercised for real, with the official chart (2026.5.x) in k3d, by the `k8s-e2e` CI job. The integration test also runs against an external PostgreSQL (`DB=postgres`, CI job `integration-postgres`). What has **not** been done: managed-cloud issuers (EKS/GKE). Releases are not signed (SHA-256 checksums only).
+The Helm values (`deploy/helm/values-sonar-jwt-auth.yaml`) and the "Kubernetes API server" key source are installed and exercised for real, with the official chart (2026.5.x) in k3d, by the `k8s-e2e` CI job. The integration test also runs against an external PostgreSQL (`DB=postgres`, CI job `integration-postgres`). What has **not** been done: managed-cloud issuers (EKS/GKE). Releases carry SHA-256 checksums and GitHub build-provenance attestations (see "Verifying a release").
 Other editions and multi-node (DCE) SonarQube are untested.
 **Upgrade procedure:** (the weekly `compat-latest` run tells you in advance whether the newest SonarQube breaks it) (1) read the release notes for a jar built for the new version, (2) upgrade the jar and SonarQube together,
 (3) check the boot log for `extension registered`, (4) run `scripts/integration/run.sh` against a staging instance.
 **Rollback:** remove the `-javaagent` option for this jar (SonarQube then behaves as if it was never installed; provisioned users and projects stay).
+
+## Verifying a release
+Each release (from v0.1.1) is built by this repository's workflow, which signs a provenance attestation for the jar and for the init image (Sigstore, keyless: the signer is the workflow itself, no key of the maintainer is involved).
+```bash
+gh attestation verify sonar-jwt-auth-<version>.jar -R obegron/sonar-jwt-auth                     # the jar was built by obegron/sonar-jwt-auth CI from a tagged commit
+gh attestation verify oci://ghcr.io/obegron/sonar-jwt-auth-init:<version> -R obegron/sonar-jwt-auth   # same for the init image
+sha256sum -c SHA256SUMS                                                                              # integrity of the downloaded file
+```
+This proves *where and how* an artifact was built (this repo, this workflow, this commit), not that the code is free of bugs — review the commit if that matters to you.
 
 ## Supported and unsupported
 - **Supported (tested in CI):** single-node SonarQube Community Build 26.9–26.11 (26.10 primary), embedded H2 and external PostgreSQL 17, Docker and the official Helm chart on Kubernetes, key sources "Kubernetes API server", "jwksFile" and "https discovery".
