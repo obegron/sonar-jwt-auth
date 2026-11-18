@@ -5,8 +5,9 @@ The extension uses SonarQube internals, so it only supports specific Community B
 On a version where an internal API it uses is missing it **switches itself off with an ERROR in the log**. That check covers the classes and methods it calls, not every possible behaviour change, so always try an upgrade on a staging instance first (`scripts/integration/run.sh`).
 
 ## 2. Get the jar (and the init image, for Kubernetes)
-**Download a release** — <https://github.com/obegron/sonar-jwt-auth/releases> — and verify it:
+**Download a release** — <https://github.com/obegron/sonar-jwt-auth/releases> — and verify it. The Docker and Helm routes below use files from this repository, so work inside a clone:
 ```bash
+git clone https://github.com/obegron/sonar-jwt-auth && cd sonar-jwt-auth
 gh release download v0.1.2 -R obegron/sonar-jwt-auth            # or download sonar-jwt-auth-0.1.2.jar and SHA256SUMS from the release page
 gh attestation verify sonar-jwt-auth-*.jar -R obegron/sonar-jwt-auth     # optional: proves it was built by this repo's CI (docs/OPERATIONS.md#verifying-a-release)
 sha256sum -c SHA256SUMS && mkdir -p docker && cp sonar-jwt-auth-0.1.2.jar docker/sonar-jwt-auth.jar     # run from a checkout of this repo, for the Docker route
@@ -38,7 +39,8 @@ This style is exercised end to end by the `k8s-e2e` CI job (`scripts/e2e-k8s.sh`
 **B. Another cluster, or SonarQube outside Kubernetes — a key file, no network.** Export the keys once and mount them next to the config:
 ```bash
 scripts/export-jwks.sh <kube-context> > jenkins-jwks.json       # = kubectl get --raw /openid/v1/jwks
-kubectl create configmap sonar-jwt-auth-config --from-file=jwt-auth.json --from-file=jenkins-jwks.json
+kubectl create namespace sonarqube        # if it does not exist yet (same namespace as step 5b)
+kubectl -n sonarqube create configmap sonar-jwt-auth-config --from-file=jwt-auth.json=my-jwt-auth.json --from-file=jenkins-jwks.json
 ```
 ```json
 { "name": "jenkins", "issuer": "https://kubernetes.default.svc.cluster.local", "jwksFile": "/opt/sonarqube/jwt-auth/jenkins-jwks.json", ... }
@@ -51,7 +53,7 @@ For a private CA set `"caFile"` to a PEM file (the JVM trust store is then not u
 `allowInsecureHttp` permits plain http and exists for throw-away test clusters only.
 
 ## 4. Write the config
-`jwt-auth.json` (a ConfigMap in Kubernetes). One entry per issuer/cluster; clusters may share the same `issuer` string.
+`jwt-auth.json` (a ConfigMap in Kubernetes). **Replace the example hostnames (`*.example.org`) with your own.** One entry per issuer/cluster; clusters may share the same `issuer` string.
 
 ```json
 { "sources": [
@@ -150,6 +152,7 @@ volumes:
   - name: sonar-token
     projected: {sources: [{serviceAccountToken: {audience: sonarqube, expirationSeconds: 600, path: token}}]}
 # step:
+#   (mount it: volumeMounts: [{name: sonar-token, mountPath: /var/run/secrets/sonar, readOnly: true}]; NAMESPACE = the pod's namespace, e.g. from the downward API metadata.namespace)
 #   export SONAR_TOKEN="$(cat /var/run/secrets/sonar/token)"
 #   sonar-scanner -Dsonar.host.url=https://sonar.example.org -Dsonar.projectKey=${NAMESPACE}_myapp   # must start with the pod's namespace + "_" because the rule above says "${ns}_.*"
 ```
