@@ -29,7 +29,7 @@ class ScopeTest {
     assertTrue(Scope.pathAllowed("/api/v2/analysis/engine", d));
     assertFalse(Scope.pathAllowed("/api/ce/submit/x", d));
     assertFalse(Scope.pathAllowed("/api/ce/submitx", d));
-    assertFalse(Scope.pathAllowed("/api/ce/task", d));          // cannot be scoped by project: not allowed by default
+    assertFalse(Scope.pathAllowed("/api/ce/task", d));          // cannot be scoped by project: not allowed unless the source sets allowQualityGateWait
     assertFalse(Scope.pathAllowed("/api/users/search", d));
     assertFalse(Scope.pathAllowed("/api/user_tokens/generate", d));
     assertTrue(Scope.pathAllowed("/anything", List.of("*")));
@@ -44,6 +44,12 @@ class ScopeTest {
     assertNull(Scope.violation("/api/projects/create", params("project", "tekton-x"), TEKTON));
   }
 
+  @Test void newCodePeriodLookupIsAllowedAndScopedToItsProject() {
+    assertTrue(Scope.pathAllowed("/api/new_code_periods/show", AuthConfig.DEFAULT_ALLOWED_PATHS));
+    assertNull(Scope.violation("/api/new_code_periods/show", params("project", "tekton-a", "branch", "main"), TEKTON));
+    assertNotNull(Scope.violation("/api/new_code_periods/show", params("project", "jenkins-a"), TEKTON));
+  }
+
   @Test void optionalAndUnscopedEndpoints() {
     assertNull(Scope.violation("/api/settings/values", params(), TEKTON));                       // global settings
     assertNotNull(Scope.violation("/api/settings/values", params("component", "jenkins-a"), TEKTON));
@@ -56,8 +62,12 @@ class ScopeTest {
   @Test void unknownEndpointsAndCrossProjectIdsAreFailClosed() {
     assertNotNull(Scope.violation("/api/custom/thing", params(), TEKTON));
     assertNull(Scope.violation("/api/custom/thing", params("project", "tekton-q"), TEKTON));
-    assertNotNull(Scope.violation("/api/qualitygates/project_status", params("projectKey", "tekton-a", "analysisId", "AX1"), TEKTON));
-    assertNotNull(Scope.violation("/api/qualitygates/project_status", params("analysisId", "AX1"), TEKTON));
+    // quality-gate wait: by analysis id (cannot be scoped), but a project key, if present, must match and projectId is refused
+    assertNull(Scope.violation("/api/qualitygates/project_status", params("analysisId", "AX1"), TEKTON));
     assertNull(Scope.violation("/api/qualitygates/project_status", params("projectKey", "tekton-a"), TEKTON));
+    assertNotNull(Scope.violation("/api/qualitygates/project_status", params("projectKey", "jenkins-a"), TEKTON));
+    assertNotNull(Scope.violation("/api/qualitygates/project_status", params("projectKey", "jenkins-a", "analysisId", "AX1"), TEKTON));
+    assertNotNull(Scope.violation("/api/qualitygates/project_status", params("projectId", "123"), TEKTON));
+    assertNull(Scope.violation("/api/ce/task", params("id", "AYabc"), TEKTON));
   }
 }

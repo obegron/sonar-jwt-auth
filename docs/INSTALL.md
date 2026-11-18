@@ -8,9 +8,9 @@ On a version where an internal API it uses is missing it **switches itself off w
 **Download a release** — <https://github.com/obegron/sonar-jwt-auth/releases> — and verify it. The Docker and Helm routes below use files from this repository, so work inside a clone:
 ```bash
 git clone https://github.com/obegron/sonar-jwt-auth && cd sonar-jwt-auth
-gh release download v0.1.2 -R obegron/sonar-jwt-auth            # or download sonar-jwt-auth-0.1.2.jar and SHA256SUMS from the release page
+gh release download v0.1.3 -R obegron/sonar-jwt-auth            # or download sonar-jwt-auth-0.1.3.jar and SHA256SUMS from the release page
 gh attestation verify sonar-jwt-auth-*.jar -R obegron/sonar-jwt-auth     # optional: proves it was built by this repo's CI (docs/OPERATIONS.md#verifying-a-release)
-sha256sum -c SHA256SUMS && mkdir -p docker && cp sonar-jwt-auth-0.1.2.jar docker/sonar-jwt-auth.jar     # run from a checkout of this repo, for the Docker route
+sha256sum -c SHA256SUMS && mkdir -p docker && cp sonar-jwt-auth-0.1.3.jar docker/sonar-jwt-auth.jar     # run from a checkout of this repo, for the Docker route
 ```
 Each release also publishes the init-container image `ghcr.io/obegron/sonar-jwt-auth-init:<version>` (public), which the Helm values use as is.
 
@@ -83,6 +83,7 @@ For a private CA set `"caFile"` to a PEM file (the JVM trust store is then not u
 | `audiences` | **required**; one must be in the token's `aud` |
 | `rules[]` | first match wins |
 | `jwksFile` / `jwksUri` / `caFile` / `bearerTokenFile` / `allowForeignJwksHost` | how the keys are obtained, see step 3 |
+| `allowQualityGateWait` | default false. Set true if your pipelines use `sonar.qualitygate.wait=true`: the scanner then polls `/api/ce/task` and `/api/qualitygates/project_status` by task/analysis id, which cannot be tied to a project key. Trade-off: a scoped identity could read the status of another project's task/analysis *if it knew its random id* |
 | `allowedPathPrefixes` | what a JWT session may call; default is exactly what `sonar-scanner` needs. Exact paths, or a prefix ending in `/`. **Widening it weakens `projectKeyPattern`**: only the built-in endpoints are scoped precisely, other paths are only checked for `projectKey`/`project`/`component`/`key`. `["*"]` is refused when any rule has a `projectKeyPattern` |
 | `maxTokenLifetimeSeconds` | default 86400 (a safe upper bound, but revocation is by expiry only): **set it just above your tokens' lifetime**, e.g. 900 for `expirationSeconds: 600` as in the example. Tokens valid longer (exp − iat) are refused; 0 disables |
 | `clockSkewSeconds` | default 60 |
@@ -122,7 +123,7 @@ kubectl create namespace sonarqube
 kubectl -n sonarqube create configmap sonar-jwt-auth-config --from-file=jwt-auth.json=my-jwt-auth.json     # your config from step 4
 helm upgrade --install sonarqube sonarqube/sonarqube -n sonarqube -f deploy/helm/values-sonar-jwt-auth.yaml --set monitoringPasscode=<secret>
 ```
-The values use the published init image `ghcr.io/obegron/sonar-jwt-auth-init:0.1.2` (the tag must match the SonarQube version you tested against, see [OPERATIONS.md](OPERATIONS.md#compatibility)). If you build and host your own, replace the registry **and the tag** in the values file.
+The values use the published init image `ghcr.io/obegron/sonar-jwt-auth-init:0.1.3` (the tag must match the SonarQube version you tested against, see [OPERATIONS.md](OPERATIONS.md#compatibility)). If you build and host your own, replace the registry **and the tag** in the values file.
 **Database:** recent chart versions no longer bundle PostgreSQL — without `jdbcOverwrite` SonarQube uses its embedded H2, which is for evaluation only. For production configure an external database as usual.
 This install path is run for real, with the official chart, by the `k8s-e2e` CI job.
 ### c) Together with sonarqube-community-branch-plugin
@@ -163,7 +164,7 @@ Jenkins: each Jenkins is its own `source` (its own issuer/keys), so you decide p
 ```
 `"projectKeyPattern": ".*"` states "any project" on purpose (no config warning; an *absent* pattern also means unscoped but logs a warning). Paths are still limited to what the scanner needs. Tekton sources keep their own `${ns}_.*` prefixes next to it.
 Use the OIDC token your Jenkins issues (e.g. the *OpenID Connect Provider* plugin's ID-token credential, audience `sonarqube`) as `SONAR_TOKEN`.
-Branch analysis needs `sonar.branch.name` and the branch plugin, as before.
+`sonar.qualitygate.wait=true` needs `"allowQualityGateWait": true` on the source (see the table in step 4). Branch analysis needs `sonar.branch.name` and the branch plugin, as before.
 
 ## 8. Verify
 Boot log should show, in order:

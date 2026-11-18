@@ -26,6 +26,7 @@ python3 scripts/integration/jwt_tool.py jwks "$W" > "$W/cfg/file-jwks.json"
 python3 - "$W/cfg/jwt-auth.json" <<'PY'
 import json,sys
 p=sys.argv[1]; c=json.load(open(p))
+c["sources"][0]["allowQualityGateWait"]=True   # pipelines use sonar.qualitygate.wait
 # many namespaces, one rule: every appN namespace gets its own user and its own project-key prefix
 c["sources"][0]["rules"].insert(0,{"subject":"system:serviceaccount:(?<ns>app[0-9]+):pipeline","login":"ns_${ns}","name":"Tekton ${ns}","autoProvision":True,
   "groups":["tekton-scanners"],"projectKeyPattern":"${ns}_.*"})
@@ -74,6 +75,20 @@ FILE_TOK=$(python3 scripts/integration/jwt_tool.py mint "$W" https://file.test.i
 check "second source (static jwksFile, no network) works"  "$(code -X POST -H "Authorization: Bearer $FILE_TOK" $S/api/projects/create -d name=f -d project=file-a)" 200
 check "...and is scoped by its own projectKeyPattern"        "$(code -X POST -H "Authorization: Bearer $FILE_TOK" $S/api/projects/create -d name=f -d project=tekton-z)" 401
 check "...and its tokens do not work for the other source's scope" "$(code -X POST -H "Authorization: Bearer $OK" $S/api/projects/create -d name=f -d project=file-b)" 401
+FILE_TOK=$(python3 scripts/integration/jwt_tool.py mint "$W" https://file.test.invalid --sub system:serviceaccount:ci:filer)
+echo "scanner scenarios with the default allowlist (project tekton-scan2):"
+scanrun(){ docker run --rm --network host --add-host=host.docker.internal:host-gateway -v "$W/src":/usr/src -e SONAR_HOST_URL=$S -e SONAR_TOKEN="$(mint --sub system:serviceaccount:ci:builder)" \
+  sonarsource/sonar-scanner-cli "$@" 2>&1; }
+refused(){ docker logs $NAME 2>&1 | grep -E 'jwt-auth: .*(may not call|denied on)' | sed -E 's/^.*jwt-auth: //' | sort | uniq -c | cut -c1-200; }
+OUT=$(scanrun -Dsonar.projectKey=tekton-scan2); check "first analysis succeeds" "$(echo "$OUT" | grep -c 'EXECUTION SUCCESS')" 1
+OUT=$(scanrun -Dsonar.projectKey=tekton-scan2); check "second analysis of the existing project succeeds" "$(echo "$OUT" | grep -c 'EXECUTION SUCCESS')" 1
+[ "$(echo "$OUT" | grep -c 'EXECUTION SUCCESS')" = 1 ] || { echo "--- refused by the extension:"; refused; }
+OUT=$(scanrun -Dsonar.projectKey=tekton-scan2 -Dsonar.qualitygate.wait=true -Dsonar.qualitygate.timeout=120); check "analysis with sonar.qualitygate.wait=true succeeds" "$(echo "$OUT" | grep -c 'EXECUTION SUCCESS')" 1
+[ "$(echo "$OUT" | grep -c 'EXECUTION SUCCESS')" = 1 ] || { echo "--- refused by the extension:"; refused; echo "$OUT" | grep -E 'ERROR|WARN' | head -4 | cut -c1-200; }
+check "quality-gate polling is refused for a source that did not enable it" "$(code -H "Authorization: Bearer $FILE_TOK" "$S/api/ce/task?id=nope")" 401
+check "...and reaches SonarQube (404 task not found) where it is enabled"  "$(code -H "Authorization: Bearer $(mint --sub system:serviceaccount:ci:builder)" "$S/api/ce/task?id=nope")" 404
+echo "all calls refused so far (only the deliberate refusals above are expected):"; refused
+
 echo "many namespaces, one rule (app1/app2/app3):"
 for n in app1 app2 app3; do
   T=$(mint --sub system:serviceaccount:$n:pipeline)

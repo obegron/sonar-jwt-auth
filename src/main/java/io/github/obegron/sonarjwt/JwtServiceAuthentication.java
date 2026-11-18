@@ -79,13 +79,15 @@ public class JwtServiceAuthentication implements ServiceAuthentication {
     if (path == null) { stats.denied(); Log.throttledWarn(LOG, "path:" + ok.subject(), "jwt-auth: refused suspicious request path from " + Log.clean(ok.subject()) + ": " + Log.clean(uri)); return Optional.empty(); }
     if (!Scope.pathAllowed(path, ok.allowedPathPrefixes())) {
       stats.denied();
-      Log.throttledWarn(LOG, "denied-path:" + ok.subject(), "jwt-auth: " + Log.clean(ok.subject()) + " (" + ok.source() + ") may not call " + path + " (add it to allowedPathPrefixes if intended)");
+      String hint = path.equals("/api/ce/task") || path.equals("/api/qualitygates/project_status")
+          ? "quality-gate wait is off: set \"allowQualityGateWait\": true on source '" + ok.source() + "'" : "add it to allowedPathPrefixes if intended";
+      Log.throttledWarn(LOG, "denied-path:" + ok.subject() + path, "jwt-auth: " + Log.clean(ok.subject()) + " (" + ok.source() + ") may not call " + path + " (" + hint + ")");
       return Optional.empty();
     }
     String violation = Scope.violation(path, req::getParameterValues, ok.projectKeyPattern());
     if (violation != null) {
       stats.denied();
-      Log.throttledWarn(LOG, "scope:" + ok.subject(), "jwt-auth: " + Log.clean(ok.subject()) + " (" + ok.source() + ") denied on " + path + ": " + violation);
+      Log.throttledWarn(LOG, "scope:" + ok.subject() + path, "jwt-auth: " + Log.clean(ok.subject()) + " (" + ok.source() + ") denied on " + path + ": " + violation);
       // Not an exception: a ForbiddenException thrown here is not handled by SonarQube's authentication layer (HTTP 500). Declining leaves
       // the JWT unrecognised, so the request ends in the normal 401 and the reason is in the log.
       return Optional.empty();

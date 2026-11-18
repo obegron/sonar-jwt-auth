@@ -28,7 +28,7 @@ public final class AuthConfig {
   public static final List<String> DEFAULT_ALLOWED_PATHS = List.of(
       "/api/ce/submit", "/api/v2/analysis/", "/api/settings/values", "/api/plugins/installed", "/api/plugins/download",
       "/api/server/version", "/api/qualityprofiles/search", "/api/languages/list", "/api/features/list", "/api/metrics/search",
-      "/api/analysis_cache/get", "/api/projects/create", "/api/project_branches/list", "/api/project_pull_requests/list", "/batch/project");
+      "/api/analysis_cache/get", "/api/projects/create", "/api/project_branches/list", "/api/project_pull_requests/list", "/api/new_code_periods/show", "/batch/project");
 
   public List<Source> sources = List.of();
 
@@ -61,6 +61,12 @@ public final class AuthConfig {
     /** Paths this source may call: exact paths, or a prefix ending in '/'; empty = {@link #DEFAULT_ALLOWED_PATHS}; ["*"] = everything. */
     public List<String> allowedPathPrefixes = List.of();
     public long clockSkewSeconds = 60;
+    /**
+     * Allow sonar.qualitygate.wait: the scanner then polls /api/ce/task and /api/qualitygates/project_status by task/analysis id, which cannot be tied
+     * to a project key. Off by default: with it on, a scoped identity could read the status of another project's task/analysis, but only if it knows its
+     * (random, unguessable) id. Ignored when allowedPathPrefixes is set explicitly (list the two paths yourself then).
+     */
+    public boolean allowQualityGateWait;
     /** Tokens valid for longer than this (exp - iat) are refused, so a leaked long-lived token is not accepted. 0 disables the check. */
     public long maxTokenLifetimeSeconds = 86400;
 
@@ -71,7 +77,13 @@ public final class AuthConfig {
     }
 
     String effectiveDiscoveryUrl() { return discoveryUrl == null || discoveryUrl.isBlank() ? issuer : discoveryUrl; }
-    List<String> effectiveAllowedPaths() { return allowedPathPrefixes.isEmpty() ? DEFAULT_ALLOWED_PATHS : allowedPathPrefixes; }
+    List<String> effectiveAllowedPaths() {
+      if (!allowedPathPrefixes.isEmpty()) return allowedPathPrefixes;
+      if (!allowQualityGateWait) return DEFAULT_ALLOWED_PATHS;
+      List<String> p = new ArrayList<>(DEFAULT_ALLOWED_PATHS);
+      p.add("/api/ce/task"); p.add("/api/qualitygates/project_status");
+      return p;
+    }
   }
 
   @JsonIgnoreProperties(ignoreUnknown = false)

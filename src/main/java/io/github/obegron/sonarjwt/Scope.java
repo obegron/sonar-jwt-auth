@@ -29,7 +29,11 @@ final class Scope {
       e("/batch/project", Mode.REQUIRED, "key"),
       e("/api/project_branches/list", Mode.REQUIRED, "project"),
       e("/api/project_pull_requests/list", Mode.REQUIRED, "project"),
-      new Entry("/api/qualitygates/project_status", Mode.REQUIRED, List.of("projectKey"), List.of("analysisId", "projectId")),
+      e("/api/new_code_periods/show", Mode.REQUIRED, "project"),
+      // identified by task / analysis id, which cannot be tied to a project key; only reachable when the source allows quality-gate wait.
+      // A projectKey, if given, must still match; projectId (a different identifier) is refused.
+      e("/api/ce/task", Mode.NONE),
+      new Entry("/api/qualitygates/project_status", Mode.OPTIONAL, List.of("projectKey", "project"), List.of("projectId")),
       e("/api/plugins/installed", Mode.NONE), e("/api/plugins/download", Mode.NONE), e("/api/server/version", Mode.NONE),
       e("/api/languages/list", Mode.NONE), e("/api/features/list", Mode.NONE), e("/api/metrics/search", Mode.NONE));
 
